@@ -1,0 +1,34 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+.vite/
+
+# ---- 环境变量与密钥 ----
+.env
+.env.local
+*.pem
+*.key
+
+# ---- 本地数据 ----
+# 上传的原始文档、向量库导出等本地产物不入库
+data/uploads/
+data/exports/
+*.log
+
+# ---- 编辑器 ----
+.idea/
+.vscode/
+
+# ---- 含硬编码 API Key 的本地脚本 ----
+# 查询余额.py 内含真实 DeepSeek API Key，先不入库；
+# 改成从环境变量 DEEPSEEK_API_KEY 读取后可移除此行再提交。
+查询余额.py
