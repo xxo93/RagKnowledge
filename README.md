@@ -70,7 +70,35 @@ docker run -d --name pgvector -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rag_a
 
 完整安装步骤（Docker / apt / dnf / 源码编译）与踩坑清单见需求文档附录 A。
 
+## 环境变量配置
+
+项目密钥统一放在根目录的 `.env`（不入库），仓库只提交模板 `.env.example`。
+
+```bash
+copy .env.example .env      # Windows
+cp .env.example .env        # Linux / macOS
+```
+
+`.env` 中填写：
+
+```
+DEEPSEEK_API_KEY=sk-xxxxxxxx
+```
+
+代码中通过 `python-dotenv` 加载后读取，不硬编码：
+
+```python
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+```
+
+依赖：`python-dotenv`（已在 `requirement.txt` 中）。
+
 ## 注意
 
-- `.env`、`data/uploads/` 等本地产物与密钥已在 `.gitignore` 中排除。
-- `查询余额.py` 因内含硬编码 API Key，未纳入版本管理。
+- `.env`、`data/uploads/` 等本地产物与密钥已在 `.gitignore` 中排除，切勿提交真实密钥。
+- `查询余额.py` 已改为从 `DEEPSEEK_API_KEY` 环境变量读取 Key，可正常纳入版本管理。

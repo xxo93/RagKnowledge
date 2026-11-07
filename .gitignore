@@ -12,7 +12,8 @@ node_modules/
 dist/
 .vite/
 
-# ---- 环境变量与密钥 ----
+# ---- 环境变量与密钥文件 ----
+# 真实密钥写在本地 .env，不入库；仓库只提交 .env.example
 .env
 .env.local
 *.pem
@@ -27,8 +28,3 @@ data/exports/
 # ---- 编辑器 ----
 .idea/
 .vscode/
-
-# ---- 含硬编码 API Key 的本地脚本 ----
-# 查询余额.py 内含真实 DeepSeek API Key，先不入库；
-# 改成从环境变量 DEEPSEEK_API_KEY 读取后可移除此行再提交。
-查询余额.py
