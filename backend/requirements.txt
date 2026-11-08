@@ -1,0 +1,34 @@
+# ============================================================================
+# RagKnowledge 后端依赖（Python 3.10+，实机 3.12 / 3.13 均可）
+# 安装：python -m pip install -r requirements.txt
+# 说明：给出兼容下限版本；首次在干净环境安装后建议冻结固定版本到锁定文件。
+# ============================================================================
+
+# ---- Web 框架 ----
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# ---- 配置 / 数据校验 ----
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# ---- 数据库 / pgvector（单库：业务表 + 向量表）----
+psycopg[binary,pool]>=3.2
+pgvector>=0.5.0
+
+# ---- LLM / Agent ----
+openai>=1.40
+langgraph>=0.2.0
+
+# ---- 文档解析（PDF / DOCX / Markdown）----
+PyPDF2>=3.0
+python-docx>=1.1
+markdown>=3.6
+
+# ---- 数值 ----
+numpy>=1.26
+
+# ---- 测试 ----
+pytest>=8.0
