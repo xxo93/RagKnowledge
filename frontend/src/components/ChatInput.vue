@@ -1,5 +1,5 @@
 <script setup>
-// 底部输入框（P-02）：Enter 发送、Shift+Enter 换行；请求中禁用发送并显示中断按钮（F-08）。
+// 输入框：Enter 发送、Shift+Enter 换行；流式请求中禁用发送并显示中断按钮
 import { ref } from 'vue'
 
 const props = defineProps({ streaming: { type: Boolean, default: false } })

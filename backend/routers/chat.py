@@ -1,13 +1,12 @@
-"""对话路由（F-08 SSE 流式 / F-11 历史回填，M4 接通）。
+"""对话问答路由（SSE 流式）。
 
 帧协议对齐前端 `api/sse.js`：`event: <name>\ndata: <json>\n\n`，空行分隔；`tool/token/source/done/error`。
 编排纪律：
 1. 流前校验会话存在（不存在直接 JSON 40402，不进入 SSE 流）；
 2. memory.load_recent 取最近 HISTORY_ROUNDS 轮历史，经 build_prompt 参与 LLM 上下文；
 3. 先由 agent.graph.run_once 完成工具调度与观察（SQL 连接在此阶段归还），再按工具类型产出 token；
-4. calculator/doc_stats 输出确定性结果文本；knowledge_search 命中走 rag.stream_answer 流式 LLM，
-   无命中走固定话术（不调 LLM、不编造）；
-5. 仅在 token 完整产出、流程正常结束时 insert_record；客户端中断（CancelledError）不落库（架构 §3.5）；
+4. calculator/doc_stats 输出确定性结果文本；knowledge_search 命中走 rag.stream_answer 流式 LLM，无命中走固定话术（不调 LLM、不编造）；
+5. 仅在 token 完整产出、流程正常结束时 insert_record；客户端中断（CancelledError）不落库；
 6. 不在 LLM 流式循环内持有数据库连接（db.py §5.5）。
 """
 from __future__ import annotations
@@ -57,7 +56,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
         raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问，请先新建会话", http_status=404)
 
     async def _prepare():
-        """流前置：历史加载 + 状态图执行（决策/检索/重排）；独立成任务以便前置静默期发心跳。"""
+        """前置阶段：加载历史并执行 Agent 决策、检索与重排；独立任务便于静默期发送心跳。"""
         history = await memory.load_recent(body.session_id)
         final = await graph.run_once(body.query, history)
         decision = (final.get("decision") or {}).get("tool")
@@ -72,8 +71,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
         prep: asyncio.Task | None = None
         try:
             prep = asyncio.create_task(_prepare())
-            # 前置阶段（决策 LLM / 向量化 / Rerank）可能长时间无业务帧；按间隔发送 SSE 注释帧 ": ping" 保活，
-            # 前端 sse.js 对 ":" 开头行直接跳过，不产生业务事件。
+            # 前置阶段长时间无业务帧时发送 SSE 注释帧，前端会跳过非业务行
             while not prep.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(prep), timeout=settings.SSE_HEARTBEAT_SEC)
@@ -90,7 +88,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                     "round": tc.get("round"),
                 })
 
-            # 2) 引用来源事件（先于答案文本，前端可先渲染来源卡片骨架）
+            # 来源事件先于答案文本发送，前端可先渲染来源卡片
             if sources:
                 yield _frame("source", {"sources": sources})
 
@@ -103,8 +101,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
             elif decision == "knowledge_search":
                 hits = _find_hits(final)
                 if sources and hits:
-                    # token 期保活：静默期发 ": ping" 注释帧；底层 LLM 生成器超时不被取消，
-                    # 避免丢失后续 token（实现见 services/stream_heartbeat.py）。
+                    # token 静默期发送心跳；底层生成器不因本次超时等待被取消
                     async for item in stream_heartbeat.aiter_with_heartbeat(
                         rag_svc.stream_answer(hits, body.query, history),
                         settings.SSE_HEARTBEAT_SEC,

@@ -1,8 +1,8 @@
-"""knowledge_search 工具（F-05 / §4.4 契约）。
+"""知识库检索工具。
 
 入参：{"query": str}；出参：{"ok", "answer", "sources", "error"}。
-工具内部不直接读写数据库，统一经 services.rag（依赖规则 R4）。
-工具异常被捕获为 ok=False，由上层回传 LLM 组织回复（F-09）。
+工具内部不直接读写数据库，统一经 services.rag。
+工具异常被捕获为 ok=False，由上层回传 LLM 组织回复。
 """
 from __future__ import annotations
 

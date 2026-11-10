@@ -1,5 +1,5 @@
 <script setup>
-// 工具调用标签（P-02 / F-08）：展示「已检索知识库 / 已执行计算 / 正在统计…」。
+// 工具调用标签：展示工具名称、执行状态与轮次
 defineProps({ tool: { type: Object, default: () => ({}) } })
 const typeMap = { running: 'warning', done: 'success' }
 </script>

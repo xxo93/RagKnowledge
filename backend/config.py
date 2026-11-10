@@ -1,4 +1,4 @@
-"""全局配置读取（需求文档 §五.3 / 架构文档 §8.1）。
+"""全局应用配置读取。
 
 设计原则：
 - 配置来源优先级：环境变量 > .env 文件 > 代码默认值（pydantic-settings 保证）。
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     )
 
     # ---------- 服务 ----------
-    APP_HOST: str = "127.0.0.1"          # 架构 §6.4：无鉴权，只监听本机
+    APP_HOST: str = "127.0.0.1"          # 服务仅监听本机回环地址
     APP_PORT: int = 8000
     LOG_LEVEL: str = "INFO"
     CORS_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -39,22 +39,22 @@ class Settings(BaseSettings):
     DB_POOL_MIN: int = 2
     DB_POOL_MAX: int = 10
 
-    # ---------- LLM（OpenAI 兼容协议，Provider 可配，ADR-009） ----------
+    # ---------- LLM（OpenAI 兼容协议，Provider 可配置） ----------
     LLM_PROVIDER: str = "deepseek"
     LLM_BASE_URL: str = "https://api.deepseek.com"
-    LLM_API_KEY: str = ""                # 必填，骨架阶段允许为空；M2 真实调用前校验
+    LLM_API_KEY: str = ""                # 未配置时 LLM 生成能力不可用
     LLM_MODEL: str = "deepseek-chat"
     LLM_TIMEOUT: int = 60
-    # M4：plan 是否首选 LLM 结构化决策；False 时纯关键词兜底（离线回归 / 控费 / 模型不可用降级）
+    # plan 是否优先使用 LLM 结构化决策；False 时回退确定性关键词决策
     LLM_PLAN_ENABLED: bool = True
 
-    # ---------- Embedding（适配器模式，ADR-008；当前选型方案②=api，百炼 text-embedding-v3） ----------
+    # ---------- Embedding（适配器模式；API 文本向量模型） ----------
     EMBEDDING_PROVIDER: str = "api"      # local / api / ollama
-    EMBEDDING_MODEL: str = "text-embedding-v3"   # 百炼，默认 1024 维，与 vector(1024) 匹配
-    EMBEDDING_DIM: int = 1024           # 【高危】必须与 document_chunk.embedding vector(N) 严格一致
-    EMBEDDING_BATCH_SIZE: int = 10       # 实际单批另受供应商上限约束（v3 OpenAI 兼容模式 ≤10 行）
+    EMBEDDING_MODEL: str = "text-embedding-v3"
+    EMBEDDING_DIM: int = 1024           # 必须与 document_chunk.embedding 的 vector(N) 一致
+    EMBEDDING_BATCH_SIZE: int = 10       # 单批数量还受供应商接口限制约束
     EMBEDDING_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    EMBEDDING_API_KEY: str = ""          # 百炼 API Key（兼容 OpenAI /embeddings）；缺 Key 时入库/检索向量化报 50003
+    EMBEDDING_API_KEY: str = ""          # 缺失时入库/检索向量化失败并由调用方降级或报错
 
     # ---------- 切片 ----------
     CHUNK_SIZE: int = 500
@@ -75,10 +75,10 @@ class Settings(BaseSettings):
 
     # ---------- Agent ----------
     HISTORY_ROUNDS: int = 5              # 最近 N 轮（一问一答为一轮）
-    MAX_TOOL_ROUNDS: int = 3              # 循环上限，防止死循环（需求 F-06）
-    # assess 后是否允许再规划回跳工具（主循环框架开关）；默认确定性收敛、不额外调用外部模型
+    MAX_TOOL_ROUNDS: int = 3              # 工具循环上限，防止重复回跳死循环
+    # assess 后是否允许再规划回跳工具；默认按确定性规则收敛，避免额外 LLM 调用
     MULTI_ROUND_ENABLED: bool = True
-    # 是否由 LLM 做再决策（True 会增加 LLM 调用；默认 False 控费，预留扩展点）
+    # 是否由 LLM 做再决策；True 会增加 LLM 调用，默认 False
     LLM_REPLAN_ENABLED: bool = False
 
     # ---------- SSE 心跳 ----------
@@ -119,7 +119,7 @@ class Settings(BaseSettings):
         return self.UPLOAD_MAX_MB * 1024 * 1024
 
     def safety_check(self) -> list[str]:
-        """启动阶段的软性校验，返回警告信息列表（不直接抛错，便于骨架独立启动）。"""
+        """启动时执行软性配置检查，返回警告列表；不阻断应用启动。"""
         warnings: list[str] = []
         if not self.LLM_API_KEY:
             warnings.append("未配置 LLM_API_KEY，LLM 生成能力不可用（仅影响 M2 之后链路）")

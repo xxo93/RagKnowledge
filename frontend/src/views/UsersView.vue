@@ -1,7 +1,6 @@
 <script setup>
-// 用户管理页（管理员专属，设计 §7.4 / P5）：
-// 列表 + 创建 + 启用/禁用 + 重置密码。安全边界仍在后端（member 调用一律 40303），
-// 前端只按角色渲染入口、禁用“操作自己”这类明显无意义按钮。
+// 管理员用户管理页：列表、创建、启禁用与重置密码
+// 前端按角色隐藏入口；最终权限仍由后端强制校验
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -79,7 +78,7 @@ async function onCreate() {
     createVisible.value = false
     await refresh(1)
   } catch (e) {
-    // 40004（用户名已存在）等业务错误由全局提示；这里补充针对创建表单的文案
+    // 业务错误由全局拦截器提示；这里补充用户名重复的表单级提示
     if (e.bizCode === 40004) ElMessage.error('用户名已存在，请更换')
   } finally {
     creating.value = false

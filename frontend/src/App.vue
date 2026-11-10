@@ -1,6 +1,6 @@
 <script setup>
-// 根组件：未登录显示登录页；登录后按角色显示聊天/知识库管理入口。
-// 普通用户看不到文档管理菜单，但后端仍会强制拒绝 403；前端隐藏仅为体验。
+// 根组件：未登录显示登录页；登录后按角色展示聊天与管理员入口
+// 前端隐藏普通用户不可见菜单；最终权限仍由后端强制校验
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import DocsView from './views/DocsView.vue'

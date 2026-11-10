@@ -1,5 +1,5 @@
 <script setup>
-// 引用来源卡片（P-02 / F-07）：文档名 + 片段序号 + 相似度分数(两位小数) + 摘要。
+// 引用来源卡片：展示文档名、片段序号、相似度/重排分数与摘要片段
 defineProps({ source: { type: Object, default: () => ({}) } })
 </script>
 

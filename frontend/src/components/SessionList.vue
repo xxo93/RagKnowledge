@@ -1,6 +1,5 @@
 <script setup>
-// 会话列表（P-02 / F-10）：新建 / 切换 / 重命名 / 删除；按创建时间倒序。
-// 会话归属由后端强制校验，前端只做交互入口。
+// 会话列表：新建、切换、重命名与删除；会话归属由后端强制校验
 defineProps({ sessions: { type: Array, default: () => [] }, currentId: { type: [Number, null], default: null } })
 defineEmits(['new', 'select', 'rename', 'remove'])
 </script>

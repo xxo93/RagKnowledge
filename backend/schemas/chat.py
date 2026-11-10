@@ -1,4 +1,4 @@
-"""会话与对话接口的数据模型（需求 F-08~F-11 / 架构 §6.2、§6.3）。"""
+"""会话、聊天与 SSE 事件的数据模型。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -35,7 +35,7 @@ class RecordItem(BaseModel):
     create_time: datetime | None = None
 
 
-# ---- SSE 事件载荷（架构 §6.3，前端按 event 名分发）----
+# ---- SSE 事件载荷；前端按事件类型分发渲染 ----
 class ToolEvent(BaseModel):
     name: str
     label: str

@@ -1,4 +1,4 @@
-"""计算器工具（F-05 / 架构 §4.5 安全设计）。
+"""四则运算计算器工具。
 
 安全措施（多层防护，面试可讲）：
 1. 正则白名单：仅允许数字、空白、+ - * / ( ) .；长度 ≤ 200；
@@ -7,7 +7,7 @@
 3. 不使用 eval，采用 AST 递归求值，从根上杜绝任意代码执行；
 4. 除零捕获、结果有限性（isfinite）校验。
 
-工具出参契约（§4.4）：{"ok": bool, "expression": str, "result": float, "error": str|None}
+工具出参契约（失败返回：{"ok": False, ...}）：{"ok": bool, "expression": str, "result": float, "error": str|None}。不向状态图抛出异常。
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _eval_node(node: ast.AST) -> Any:
 
 
 def calculate(expression: str) -> dict:
-    """对外工具入口。失败返回 ok=False + error，不抛异常给 Agent 图（§4.4 失败语义）。"""
+    """对外工具入口；失败返回 ok=False 与错误说明。"""
     expr = (expression or "").strip()
     if not expr:
         return {"ok": False, "expression": expr, "result": None, "error": "表达式为空"}

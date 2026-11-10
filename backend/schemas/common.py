@@ -1,4 +1,4 @@
-"""统一响应包络与分页模型（架构文档 §6.1）。"""
+"""统一响应包络与分页数据模型。"""
 from __future__ import annotations
 
 from typing import Generic, TypeVar, Optional

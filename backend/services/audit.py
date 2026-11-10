@@ -1,4 +1,4 @@
-"""操作审计（设计 §5.4 / D7）。
+"""管理类与权限类操作审计。
 
 只记录管理类与权限类操作，**不记录聊天问答内容**。
 审计写入失败绝不影响主流程：统一降级为 warning 日志。
@@ -13,7 +13,7 @@ from db import get_pool
 
 logger = logging.getLogger("rag.audit")
 
-# 动作枚举（与设计 §5.4 对齐）
+# 审计动作常量
 AUTH_LOGIN = "AUTH_LOGIN"
 AUTH_PASSWORD = "AUTH_PASSWORD"
 DOC_UPLOAD = "DOC_UPLOAD"

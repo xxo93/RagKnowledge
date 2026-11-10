@@ -1,11 +1,9 @@
 """为异步 token 生成器叠加静默期 SSE 注释帧心跳（零外部调用、纯本地计时）。
 
-背景：流前置准备阶段已有独立心跳；本模块覆盖 token 流式期——LLM 偶发长时间不产出时，
-向 SSE 连接发送注释帧 ``: ping``，防止代理/连接因静默过久而断开。
+背景：流前置准备阶段已有独立心跳；本模块覆盖 token 流式期——LLM 偶发长时间不产出时，向 SSE 连接发送注释帧 ``: ping``，防止代理/连接因静默过久而断开。
 
-关键约束：``asyncio.wait_for`` 超时只能放弃“本次等待”，绝不能取消底层生成器（取消会
-触发 ``llm.chat_stream`` 的 finally 关闭生产 worker，导致后续 token 丢失），因此用
-``asyncio.shield`` 复用同一个 pending future，超时后底层仍在后台推进，结果不丢失。
+关键约束：``asyncio.wait_for`` 超时只能放弃“本次等待”，绝不能取消底层生成器（取消会触发 ``llm.chat_stream`` 的 finally 关闭生产 worker，导致后续 token 丢失），
+因此用``asyncio.shield`` 复用同一个 pending future，超时后底层仍在后台推进，结果不丢失。
 """
 from __future__ import annotations
 

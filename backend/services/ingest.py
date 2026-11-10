@@ -1,12 +1,12 @@
-"""入库流水线编排与事务边界（需求 F-01 / 架构 §3.1，T1/T2/T3 三事务设计）。
+"""入库流水线编排与事务边界（T1/T2/T3 三事务设计）。
 
-事务划分（为什么不是一个大事务，见架构 §3.1）：
+事务划分（为什么不是一个大事务）：
 - T1 insert_document_meta：先落 status=0 行并拿到 doc_id，立即提交；
 - T2 commit_ingest：批量写切片向量 + 置成功，原子提交，失败整体回滚；
 - T3 mark_document_failed：任一环节失败时置 status=2 + error_msg（独立提交，避免被回滚带走）。
 
 解析与 Embedding 期间不持有数据库连接（外部调用耗时不可控，防止长事务占连接）；
-同步阻塞的解析/切片/向量化经 run_in_threadpool 调度，不阻塞 asyncio 事件循环（架构 §637）。
+同步阻塞的解析/切片/向量化经 run_in_threadpool 调度，不阻塞 asyncio 事件循环。
 """
 from __future__ import annotations
 

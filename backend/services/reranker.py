@@ -1,11 +1,10 @@
-"""可选 Rerank 重排（需求 F-07 第 3 步 / 架构 §2.5）。
+"""可选 Rerank 重排。
 
 由 RERANK_ENABLED 开关控制；关闭、空候选或调用失败时一律回退向量召回原序，
 重排只是增强项，绝不阻断问答主链路。
 
-当前选型：阿里云百炼 gte-rerank-v2（原生 text-rerank HTTP 端点，非 OpenAI 兼容协议），
-鉴权复用 EMBEDDING_API_KEY（百炼 Key，不单独维护 Rerank Key）；候选为向量召回 Top-K 片段，
-按 relevance_score 二次精排，并在结果上附加 rerank_score（不覆盖原向量余弦分 score）。
+当前选型：阿里云百炼 gte-rerank-v2（原生 text-rerank HTTP 端点，非 OpenAI 兼容协议），鉴权复用 EMBEDDING_API_KEY（百炼 Key，不单独维护 Rerank Key）；
+候选为向量召回 Top-K 片段，按 relevance_score 二次精排，并在结果上附加 rerank_score（不覆盖原向量余弦分 score）。
 """
 from __future__ import annotations
 

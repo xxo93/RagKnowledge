@@ -1,5 +1,5 @@
 <script setup>
-// 知识库管理页（P-01 / F-01~F-03）：批量上传 + 文档表格 + 删除 + 运维操作；状态在父组件统一编排。
+// 知识库管理页：批量上传、文档列表、删除、重解析与索引重建
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FileUploader from '../components/FileUploader.vue'
@@ -146,7 +146,7 @@ onMounted(async () => {
       </div>
     </template>
 
-    <!-- 上传区：前端先做后缀/大小校验，服务端批量顺序处理；成功后刷新列表（F-01） -->
+    <!-- 上传区：前端先做后缀与大小校验，服务端批量顺序处理，完成后刷新列表 -->
     <FileUploader :uploading="uploading" @upload="onUpload" />
 
     <el-divider />
@@ -158,7 +158,7 @@ onMounted(async () => {
       </el-button>
     </div>
 
-    <!-- 文档列表：名称 / 状态 / 切片数 / 大小 / 时间 / 重解析 / 删除（F-02/F-03） -->
+    <!-- 文档列表：名称、状态、切片数、大小、时间、重解析与删除操作 -->
     <DocTable
       :rows="rows"
       :loading="tableLoading"

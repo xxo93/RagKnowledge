@@ -1,9 +1,5 @@
-// 对话状态编排（架构 §7.2 / P-02）：会话列表、当前会话、消息流、流式状态与中断控制器。
-// MVP 不引入 Pinia；本 composable 在 ChatView 内使用，切换会话时重置消息缓冲（§7.4）。
-// 数据契约对齐后端 M4：
-//   会话 data = { total, list:[{session_id,session_name,create_time,record_count}] }
-//   记录 data = { total, list:[{record_id,query,answer,tool_call_info,source_ref,create_time}] }
-//   SSE handlers = onTool/onToken/onSource/onDone/onError/onAbort（见 api/sse.js）
+// 对话状态编排：会话列表、当前会话、消息缓冲、流式状态与中断控制器
+// 切换会话时重置本地消息缓冲；历史记录由后端按当前用户归属返回
 import { reactive, shallowRef } from 'vue'
 import { listSessions, createSession, deleteSession, renameSession as renameSessionApi, listRecords } from '../api/chat'
 import { streamChat } from '../api/sse'
@@ -63,8 +59,7 @@ export function useChat() {
       }
       state.messages = msgs
     } catch (e) {
-      // 会话可能已被删除、或（历史）不属于当前用户：立即清空选中并刷新本人列表，
-      // 不保留指向他人/不存在会话的选中态（设计 §8.2）。
+      // 会话不存在或无权限时清空选中态并刷新列表，避免保留失效选中项
       state.currentSessionId = null
       state.messages = []
       state.toolStatus = null
@@ -92,7 +87,7 @@ export function useChat() {
   }
 
   async function removeSession(sessionId) {
-    if (state.streaming) stop() // 删除前先中断进行中的流，避免对已删除会话继续写入（S3 竞态加固）
+    if (state.streaming) stop() // 删除前先中断进行中的流，避免继续写入已删除会话
     try {
       await deleteSession(sessionId)
       if (state.currentSessionId === sessionId) {
@@ -108,7 +103,7 @@ export function useChat() {
     const q = (query || '').trim()
     if (state.streaming || !q) return
 
-    // 后端 /api/chat/stream 要求会话存在；无当前会话先自动新建（F-10）
+    // 后端要求会话存在；无当前会话时先自动新建
     let sid = state.currentSessionId
     if (!sid) {
       sid = await createNewSession()
@@ -141,7 +136,7 @@ export function useChat() {
         state.streaming = false
         state.toolStatus = null
         client.value = null
-        // 后端 saved=false 表示本次回答未落库（会话竞态删除等），轻提示但不标错误
+        // saved=false 表示本次回答未落库（会话失效等）；轻提示但不标记为错误
         if (data && data.saved === false) {
           assistant.content = assistant.content
             ? assistant.content + '\n（本次回答未保存到历史：会话已失效）'

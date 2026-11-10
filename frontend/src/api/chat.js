@@ -1,4 +1,4 @@
-// 会话与历史记录接口（需求 §7.2 / §7.3 REST 部分；流式见 sse.js）
+// 会话与历史记录 REST 接口；流式问答见 sse.js
 import http from './http'
 
 export function createSession(sessionName = '新会话') {

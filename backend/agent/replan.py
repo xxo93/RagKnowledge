@@ -1,18 +1,8 @@
-"""assess 之后的再规划（多轮主循环出口选择，架构 §4.2 / F-06 防死循环）。
+"""Agent 再规划与收敛控制。
 
-两道收敛防线：
-1. 规则门槛：`MULTI_ROUND_ENABLED` 关闭、达到 `MAX_TOOL_ROUNDS` 上限、无观察、最近工具失败，
-   一律收敛到 answer，不做无效重试；
-2. 防重复：LLM 给出的新 `(tool, args)` 若命中 `used_keys` 重复键，收敛到 answer；工具节点内另有
-   同样的 dedup 保护做第二道防线。
-
-默认 `LLM_REPLAN_ENABLED=False`：本模块不发起任何外部调用、恒收敛 answer，对话行为与单轮一致、
-不增加 LLM / Embedding 费用；开启后由 `llm_replan_decision` 产出带新 `args` 的决策，供 replan
-节点写回 `state.decision` 并回跳对应工具节点。
-
-`plan_next(state) -> (route, new_decision)`：
-- route：`knowledge_search|calculator|doc_stats|answer`，供条件边路由；
-- new_decision：`{"tool","args","reason"}`；`None` 表示本轮收敛（不更新 decision）。
+收敛规则：再规划开关关闭、达到工具轮次上限、缺少成功观察或最近工具失败时，
+直接收敛到答案生成；LLM 再决策返回的工具参数若与历史调用重复，也收敛避免循环。
+默认不启用 LLM 再决策，不产生额外模型调用；启用后由 LLM 决定是否回跳工具节点。
 """
 from __future__ import annotations
 

@@ -1,10 +1,10 @@
-"""会话与对话记录仓储（F-10/F-11 / 架构 §3.4 / ADR-002、R2）。
+"""会话与对话记录仓储。
 
 硬约束（与 vector_store 对齐）：
 - chat_session / chat_record 全部 SQL 集中在本文件；routers / services / agent 不得自行拼 SQL；
 - 100% 参数化（%(name)s），JSONB 统一经 `::jsonb` 显式转换，杜绝字符串拼接；
-- 删除会话为显式事务：先删该会话全部记录，再删会话主表（架构 §3.4 显式删除风格）；
-- 连接获取范围仅限 SQL 执行期间，LLM 流式循环内不得持有连接（db.py §5.5）。
+- 删除会话为显式事务：先删该会话全部记录，再删会话主表（显式删除风格）；
+- 连接获取范围仅限 SQL 执行期间，LLM 流式循环内不得持有连接（db.py）。
 """
 from __future__ import annotations
 
@@ -135,10 +135,9 @@ async def rename_session(session_id: int, user_id: int, session_name: str) -> di
 
 
 async def delete_session(session_id: int, user_id: int) -> None:
-    """删除用户本人会话及其全部记录（单事务）；非 owner 或不存在 -> 40402。
+    """删除当前用户会话及其全部记录；非本人或不存在时返回 40402。
 
-    先按 owner 锁定会话再删记录：若直接按 session_id 删记录，越权请求会在返回 404
-    之前就把他人的聊天记录清空（跨用户数据销毁）。
+    先按归属条件加锁查询，再删除记录与会话，避免越权请求触达他人数据。
     """
     pool = get_pool()
     async with pool.connection() as conn:
@@ -174,9 +173,7 @@ async def insert_record(
 ) -> Optional[int]:
     """落库一条问答；成功返回 record_id，未保存返回 None。
 
-    竞态加固（S2）：流前校验与会话落库之间存在窄窗口，若会话在此期间被删除，
-    前置存在性校验不通过则直接返回 None、不落库不抛错；外键冲突同样降级为 None，
-    由路由在 done 帧以 saved=false 告知前端，避免裸 FK 异常堆栈与脏写。
+    会话已删除、外键冲突等竞态场景直接返回 None，不向路由层抛出底层数据库异常。
     """
     if await _get_session(session_id) is None:
         logger.warning("会话 %s 已不存在，跳过记录落库（竞态删除）", session_id)
@@ -208,7 +205,7 @@ async def insert_record(
 
 
 async def list_records(session_id: int) -> list[dict]:
-    """历史回填：按 record_id 正序返回，含来源与工具信息（解析 JSONB）。"""
+    """按时间正序返回会话历史，包含来源与工具调用信息。"""
     pool = get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:

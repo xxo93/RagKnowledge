@@ -1,6 +1,6 @@
-"""系统信息接口 GET /api/system/info（需求 §7.4 / 架构 §6.2 / 设计 §4 权限矩阵）。
+"""系统信息接口 GET /api/system/info
 
-只返回前端展示用的非敏感元信息；严禁返回 API Key、数据库连接串、文件绝对路径（§6.2）。
+只返回前端展示用的非敏感元信息；严禁返回 API Key、数据库连接串、文件绝对路径。
 数据库不可用时 db_ready=False、统计量为 null，不影响接口本身返回。
 权限：仅管理员（权限矩阵：查看系统统计与索引信息 = admin）。
 """
@@ -24,7 +24,7 @@ async def system_info(_: dict = Depends(require_admin)):
     if is_ready():
         try:
             from services import vector_store as vs
-            # 复用统计枚举读取总量（DB 就绪后由 M1 联调；失败静默置 None）
+            # 统计读取失败时置空，不影响系统信息接口响应
             doc_total = await vs.count_stat("total_docs")
             chunk_total = await vs.count_stat("total_chunks")
         except Exception:  # noqa: BLE001

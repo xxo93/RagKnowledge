@@ -1,4 +1,4 @@
-// 知识库管理接口（需求 §7.1）。骨架阶段固定契约，后端 M1 接通后即可直接调用。
+// 知识库管理接口；仅管理员可调用，后端会强制校验权限
 import http from './http'
 
 // POST /api/docs/upload —— multipart 单文件上传，同步处理后返回 {doc_id, chunk_count, status}

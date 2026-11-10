@@ -1,7 +1,6 @@
-"""Agent 状态定义（架构 §4.1）。
+"""Agent 状态结构定义。
 
-使用 TypedDict；LangGraph 默认按 key 覆盖，observations / tool_calls 由节点内追加后整体返回，
-避免并发写冲突。字段契约与 §4.1 表一一对应。
+使用 TypedDict；LangGraph 默认按 key 覆盖，observations / tool_calls 由节点内追加后整体返回，避免并发写冲突。
 """
 from __future__ import annotations
 
@@ -45,11 +44,11 @@ class AgentState(TypedDict, total=False):
     observations: list[Observation]
     tool_calls: list[ToolCallRecord]
     sources: list[SourceRef]
-    used_keys: list[str]           # 已执行工具的防重复调用键（tool|规范化args），§4.2 再规划保护
+    used_keys: list[str]           # 已执行工具的规范化调用键，用于重复调用保护
     answer: str
     error: Optional[str]
     finished: bool
-    replan_route: Optional[str]     # replan 节点计算出的下一工具路由（无回跳时为 None）
+    replan_route: Optional[str]     # 再规划选择的下一工具路由；无需回跳时为 None
 
 
 def initial_state(query: str, history: list[dict] | None = None) -> AgentState:

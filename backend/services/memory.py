@@ -1,4 +1,4 @@
-"""会话上下文记忆（F-11 / 架构 §3.4）。
+"""会话上下文记忆。
 
 - 取最近 HISTORY_ROUNDS 轮（一问一答 = 1 条 chat_record，含 user+assistant 两条消息）；
 - 单条答案超长截断（默认 800 字），控制 token 与费用；

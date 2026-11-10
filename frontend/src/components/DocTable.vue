@@ -1,5 +1,5 @@
 <script setup>
-// 文档表格（P-01 / F-02/F-03）：名称、状态标签、切片数、大小、上传时间、重解析与删除；操作由父组件确认后执行。
+// 文档表格：展示状态、切片数、大小、上传时间，并触发重解析与删除操作
 defineProps({
   rows: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },

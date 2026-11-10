@@ -1,4 +1,4 @@
-"""LangGraph 状态图编排（F-06 / 架构 §4.2 / ADR-003）。
+"""LangGraph Agent 状态图编排。
 
 状态图（M3 落地）：
     START -> plan(意图判断，关键词兜底；LLM 结构化决策预留 M4)
@@ -40,15 +40,13 @@ _STAT_LABEL = {
 
 # ---------------- 节点 ----------------
 async def plan_node(state: AgentState) -> dict:
-    """意图判断（M4）：先 LLM 结构化决策（受 LLM_PLAN_ENABLED 控制），失败/非法或关闭时
-    回落关键词兜底（架构 §4.3）；同步决策调用经 to_thread 避免阻塞事件循环。"""
+    """执行意图决策；同步决策调用放入线程，避免阻塞事件循环。"""
     decision = await asyncio.to_thread(decision_mod.decide, state.get("query", ""))
     return {"decision": decision}
 
 
 async def knowledge_search_node(state: AgentState) -> dict:
-    """调 knowledge_search 工具；回写 observation、tool_calls、去重后的 sources。
-    防重复：同一 (tool,args) 再规划命中时跳过重复执行（§4.2 dedup 保护）。"""
+    """执行知识库检索工具，回写观察、工具调用记录与去重来源；重复调用直接跳过。"""
     args = (state.get("decision") or {}).get("args") or {}
     query = args.get("query") or state.get("query", "")
     tool_name = "knowledge_search"
@@ -92,8 +90,7 @@ async def knowledge_search_node(state: AgentState) -> dict:
 
 
 async def calculator_node(state: AgentState) -> dict:
-    """调 calculator 工具；纯 CPU 求值经 to_thread 避免阻塞事件循环。
-    防重复：同一表达式重复调用时跳过（§4.2 dedup 保护）。"""
+    """执行计算器；纯 CPU 求值放入线程；重复表达式直接跳过。"""
     args = (state.get("decision") or {}).get("args") or {}
     expression = args.get("expression") or ""
     tool_name = "calculator"
@@ -127,8 +124,7 @@ async def calculator_node(state: AgentState) -> dict:
 
 
 async def doc_stats_node(state: AgentState) -> dict:
-    """调 doc_stats 工具（枚举白名单 + 参数化聚合，不拼接 SQL）。
-    防重复：同一统计维度重复调用时跳过（§4.2 dedup 保护）。"""
+    """执行文档统计工具；统计类型使用白名单；重复统计直接跳过。"""
     args = (state.get("decision") or {}).get("args") or {}
     stat_type = args.get("stat_type") or ""
     tool_name = "doc_stats"
@@ -162,17 +158,13 @@ async def doc_stats_node(state: AgentState) -> dict:
 
 
 async def assess_node(state: AgentState) -> dict:
-    """轮次计数。每次工具执行后 round+1；上限语义由 replan 门槛收敛保证（F-06）。"""
+    """每次工具执行后累加轮次；轮次上限由 replan 收敛规则控制。"""
     new_round = state.get("round", 0) + 1
     return {"round": new_round}
 
 
 async def replan_node(state: AgentState) -> dict:
-    """assess 之后的再规划节点：计算路由与（可选）带新 args 的决策。
-
-    默认 `LLM_REPLAN_ENABLED=False` 时 `plan_next` 恒收敛、不写 decision，行为与单轮一致、
-    零额外外部调用；开启后回跳工具前把新 `decision` 写回状态，工具节点据此取新参数执行。
-    """
+    """执行再规划判断；默认收敛到答案生成，开启 LLM 再决策时可回跳工具节点。"""
     route, new_decision = replan.plan_next(state)
     if new_decision is None:
         return {"replan_route": None}
@@ -180,7 +172,7 @@ async def replan_node(state: AgentState) -> dict:
 
 
 async def answer_node(state: AgentState) -> dict:
-    """确定性汇总观察结果（M3 不调 LLM）；真实流式生成在 M4。"""
+    """汇总确定性工具观察结果。"""
     observations = state.get("observations") or []
     sources = state.get("sources") or []
     parts: list[str] = []
@@ -244,7 +236,7 @@ _compiled_graph = None
 
 
 def build_graph():
-    """构建并编译 StateGraph（真实 langgraph；延迟导入避免骨架启动强依赖）。"""
+    """构建并编译 LangGraph 状态图。"""
     from langgraph.graph import StateGraph, END
 
     g = StateGraph(AgentState)
@@ -295,7 +287,7 @@ def get_graph():
 
 # ---------------- 运行入口 ----------------
 async def run_once(query: str, history: list[dict] | None = None) -> dict:
-    """非流式执行整图，返回最终 AgentState（dict）。供集成脚本与 M4 路由复用。"""
+    """非流式执行完整状态图，返回最终状态字典。"""
     graph = get_graph()
     return await graph.ainvoke(initial_state(query, history))
 
@@ -305,15 +297,7 @@ async def run_stream(
     history: list[dict] | None = None,
     session_id: int | None = None,
 ) -> AsyncIterator[dict]:
-    """统一事件出口（§4.6 / §6.3）。M3 产出 tool / source / done；
-    token 事件（LLM 流式）与 record_id 落库在 M4 补齐。
-
-    事件字典：
-        {"type":"tool","name","label","status","round"}
-        {"type":"source","sources":[{doc_name,chunk_index,score,snippet}]}
-        {"type":"done","record_id","session_id","elapsed_ms"}
-        {"type":"error","code","msg"}
-    """
+    """输出 Agent 执行过程事件；事件类型包括 tool、source、done、error。"""
     t0 = time.monotonic()
     try:
         final = await run_once(query, history)
@@ -335,7 +319,6 @@ async def run_stream(
     if sources:
         yield {"type": "source", "sources": sources}
 
-    # TODO(M4): answer 节点接入 llm.chat_stream，在此逐 token 产出 {"type":"token","text":...}
     yield {
         "type": "done",
         "record_id": None,

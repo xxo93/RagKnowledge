@@ -1,6 +1,6 @@
 <script setup>
-// 对话页（需求 P-02 / F-08）：左会话列表 + 右消息流（流式渲染 / 工具标签 / 来源卡片）+ 底部输入框。
-// M5 接通：onMounted 加载会话并默认选中最近会话；消息深度变化自动滚动到底；工具进行中状态条。
+// 对话页：左侧会话列表，右侧消息流、工具状态与输入框
+// 初始化时加载会话列表并选中最近会话；消息变化后自动滚动到底部
 import { ref, watch, nextTick, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChat } from '../composables/useChat'
@@ -18,7 +18,7 @@ async function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-// token 增量 / 工具 / 来源变化都触发跟随滚动
+// 消息内容、工具状态或来源变化时跟随滚动到底部
 watch(() => state.messages, () => scrollToBottom(), { deep: true })
 
 async function onRename(session) {

@@ -1,9 +1,9 @@
-"""业务异常体系与全局错误处理器（架构文档 §6.1 / §8.2）。
+"""业务异常体系与全局错误处理器。
 
 约定：
-- 非 SSE 接口统一返回包络 {"code": int, "msg": str, "data": any}；成功 code=0。
-- 业务层（services/agent）只抛 BizError，不直接使用 FastAPI 的 HTTPException（依赖规则 R3）。
-- 全局处理器负责把异常转成规范 JSON，且不向前端暴露堆栈、SQL 与文件绝对路径（§8.4）。
+- 非 SSE 接口统一返回 `{"code": int, "msg": str, "data": any}`，成功 code=0；
+- 业务层（services/agent）只抛 BizError，不直接使用 FastAPI 的 HTTPException。
+- 全局处理器负责把异常转成规范 JSON，且不向前端暴露堆栈、SQL 与文件绝对路径。
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-# 业务错误码（与架构 §6.1 对齐）
+# 业务错误码；HTTP 状态由 BizError.http_status 单独控制
 OK = 0
 ERR_PARAM = 40001            # 参数校验失败
 ERR_FILE_TYPE = 40002        # 文件类型不支持

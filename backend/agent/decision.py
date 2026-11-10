@@ -1,9 +1,7 @@
-"""Agent 意图决策（架构 §4.3）。
+"""Agent 意图决策。
 
-M3 落地：**关键词兜底决策**（离线、确定性、可单测），等价于"LLM 不可用 / 解析失败"时
-的降级路径，保证状态图不依赖 LLM 即可完成三类问题的工具调度。
-M4 启用：`llm_plan_decision`（OpenAI 兼容 `response_format=json_object`）作为首选，
-其失败/非法时回落到 `keyword_decision`（与架构 §4.3 "重试 1 次 → 关键词兜底"一致）。
+落地：**关键词兜底决策**（离线、确定性、可单测），等价于"LLM 不可用 / 解析失败"时的降级路径，保证状态图不依赖 LLM 即可完成三类问题的工具调度。
+启用：`llm_plan_decision`（OpenAI 兼容 `response_format=json_object`）作为首选，其失败/非法时回落到 `keyword_decision`。
 
 决策契约：{"tool": "knowledge_search|calculator|doc_stats|None", "args": dict, "reason": str}
 """
@@ -66,7 +64,7 @@ def keyword_decision(query: str) -> dict:
 
 
 def llm_plan_decision(query: str) -> dict | None:
-    """尝试 LLM 结构化决策；任何不可用/解析失败返回 None，由调用方兜底（M4 强化首选）。"""
+    """尝试 LLM 结构化决策；不可用或解析失败时返回 None，由调用方兜底。"""
     try:
         from llm import chat
         from prompts import PLAN_SYSTEM_PROMPT
@@ -95,10 +93,7 @@ def llm_plan_decision(query: str) -> dict | None:
 
 
 def decide(query: str) -> dict:
-    """统一决策入口（架构 §4.3：先 LLM 结构化、失败/非法回落关键词兜底）。
-
-    settings.LLM_PLAN_ENABLED=False 时跳过 LLM、直接关键词兜底（离线回归与控费用途）。
-    """
+    """统一决策入口：LLM 决策失败或关闭时回退关键词规则。"""
     if settings.LLM_PLAN_ENABLED:
         llm = llm_plan_decision(query)
         if llm is not None:

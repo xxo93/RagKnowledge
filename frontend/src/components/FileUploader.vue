@@ -1,6 +1,6 @@
 <script setup>
-// 文档上传组件（P-01 / F-01）：支持点击多选 / 拖拽多个文件；前端先做后缀白名单 + 10MB 校验，
-// 合法文件以数组交给父组件顺序调用上传 API；处理中 loading。
+// 文档上传组件：支持点击多选或拖拽多个文件；前端先做后缀白名单与大小校验，
+// 合法文件数组交给父组件调用批量上传接口
 import { ElMessage } from 'element-plus'
 
 defineProps({ uploading: { type: Boolean, default: false } })

@@ -1,11 +1,8 @@
-"""RAG 检索增强编排（F-07 / 架构 §3.2）。
+"""RAG 检索增强编排。
 
-- M2：问句向量化 -> pgvector Top-K 余弦召回 -> 可选 Rerank（默认关）-> 应用层阈值过滤
-  -> 规范化来源（doc_name / chunk_index / score / snippet / content）。
-- M4：命中片段经 `build_prompt` 交给 `llm.chat_stream` 流式生成；无命中固定话术、不调 LLM；
-  LLM 异常降级为确定性来源汇总，绝不编造、不把 5xx 抛给 SSE。
-- 连接纪律：`retrieve` 内部 SQL 执行完即归还连接；`stream_answer` 只消费已取回的 hits，
-  不在 LLM 流式循环内持有数据库连接（db.py §5.5）。
+- 问句向量化 -> pgvector Top-K 余弦召回 -> 可选 Rerank（默认关）-> 应用层阈值过滤 -> 规范化来源（doc_name / chunk_index / score / snippet / content）。
+- 命中片段经 `build_prompt` 交给 `llm.chat_stream` 流式生成；无命中固定话术、不调 LLM； LLM 异常降级为确定性来源汇总，绝不编造、不把 5xx 抛给 SSE。
+- 连接纪律：`retrieve` 内部 SQL 执行完即归还连接；`stream_answer` 只消费已取回的 hits，不在 LLM 流式循环内持有数据库连接（db.py）。
 """
 from __future__ import annotations
 

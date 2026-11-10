@@ -1,9 +1,8 @@
 """统一 LLM 客户端（架构 ADR-009：OpenAI 兼容协议，Provider 可配）。
 
 - 内部使用 openai SDK，通过 base_url 切换 DeepSeek / 豆包 / 通义 / OpenAI；
-- 各家私有参数（如 reasoning_effort、thinking）通过 extra_body 透传，不散落在业务代码；
-- 本阶段（骨架）只完成客户端工厂与接口契约，真实流式生成在 M2/M4 接入；
-- 业务层只允许经本模块访问 LLM（依赖规则 R6）。
+- 业务层只允许经本模块访问 LLM。
+- 缺失密钥、依赖缺失、超时或接口异常统一转换为 BizError，由调用方决定降级策略。
 """
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ def get_client():
 
 
 def chat(messages: list[dict], *, temperature: float = 0.3, json_mode: bool = False) -> str:
-    """同步一次性生成（用于意图判断、汇总等短文本）。M2 阶段补全错误映射。"""
+    """同步一次性生成；用于意图判断、短文本汇总等不需要 token 流的场景。"""
     client = get_client()
     kwargs: dict = {
         "model": settings.LLM_MODEL,
@@ -54,11 +53,10 @@ def chat(messages: list[dict], *, temperature: float = 0.3, json_mode: bool = Fa
 
 
 async def chat_stream(messages: list[dict], *, temperature: float = 0.3) -> AsyncIterator[str]:
-    """流式生成（SSE token 事件来源，M4 接通）。
+    """流式生成 SSE token。
 
-    OpenAI SDK 的 stream 迭代是同步阻塞调用，这里用后台线程生产、asyncio.Queue +
-    loop.call_soon_threadsafe 桥接为异步生成器；缺 Key / 超时 / 接口异常统一抛
-    BizError(ERR_LLM_UNAVAILABLE)，由调用方（rag.stream_answer / 图路由）降级，不击穿 SSE。
+    OpenAI SDK 迭代是同步阻塞调用；这里在线程中生产内容，经 asyncio.Queue
+    桥接为异步生成器。模型错误统一转换为 BizError，避免击穿 SSE 主链路。
     """
     client = get_client()
     loop = asyncio.get_running_loop()

@@ -1,4 +1,4 @@
-"""文档知识库接口的数据模型（需求 F-01~F-03 / 架构 §6.2）。"""
+"""文档知识库接口的数据模型。"""
 from __future__ import annotations
 
 from datetime import datetime

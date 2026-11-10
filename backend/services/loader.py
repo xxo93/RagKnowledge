@@ -1,7 +1,7 @@
-"""文档解析：PDF / DOCX / Markdown 文本提取（需求 F-01 第 2 步 / 架构 §2.5）。
+"""文档解析：PDF / DOCX / Markdown 文本提取。
 
 - 按扩展名分派；解析库在函数内延迟导入，避免缺依赖时模块加载即失败；
-- 扫描版 PDF 无文字层时返回空串，由 ingest 判定为“无可提取文本”失败（§8.2）；
+- 扫描版 PDF 无文字层时返回空串，由 ingest 判定为“无可提取文本”失败；
 - 本模块只负责“抽取原始文本”，清洗交给 cleaner.py，职责单一。
 """
 from __future__ import annotations

@@ -1,6 +1,5 @@
 <script setup>
-// 消息气泡（P-02）：用户 / 助手样式区分；助手消息上方工具标签，下方来源卡片；
-// 流式中显示光标，异常消息使用错误样式。
+// 消息气泡：区分用户与助手样式；助手消息展示工具标签、来源卡片、流式光标与错误提示
 import ToolChip from './ToolChip.vue'
 import SourceCard from './SourceCard.vue'
 defineProps({ message: { type: Object, required: true } })

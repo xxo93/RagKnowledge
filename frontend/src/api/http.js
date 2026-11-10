@@ -1,5 +1,5 @@
-// axios 实例与统一响应解包（架构 §6.1 包络 {code, msg, data}；§7.2 数据流）
-// 同时导出 notifyError：SSE 走 fetch 而非 axios，需要复用同一套 401/403 处理。
+// axios 实例与统一响应解包；后端成功包络 code=0 时直接返回 data
+// SSE 等非 axios 通道复用 notifyError 处理 401/403 等错误
 import axios from 'axios'
 
 const http = axios.create({

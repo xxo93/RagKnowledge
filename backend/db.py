@@ -1,12 +1,12 @@
-"""PostgreSQL + pgvector 连接池（架构文档 §5.5 / ADR-001 / ADR-006）。
+"""PostgreSQL + pgvector 异步连接池。
 
 要点：
 1. 使用 psycopg3 异步连接池 AsyncConnectionPool，匹配 FastAPI 全异步；
 2. 建池后必须 register_vector，psycopg 才知道 vector 列的编解码；
 3. 【ADR-006 实机教训】pgvector-python 0.5.x 的 dumper 只注册了 Vector 与 numpy.ndarray，
-   直接传 Python list 会被推断为 smallint[] 而报类型错误；统一由 to_vector() 包装；
+直接传 Python list 会被推断为 smallint[] 而报类型错误；统一由 to_vector() 包装；
 4. 骨架阶段：数据库不可用时不让服务崩溃，db_ready=False，需要 DB 的业务接口统一返回 50001；
-5. 禁止在 LLM 流式循环内持有连接（§5.5 禁止项），连接获取范围仅限 SQL 执行期间。
+5. 禁止在 LLM 流式循环内持有连接，连接获取范围仅限 SQL 执行期间。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def is_ready() -> bool:
 
 
 def to_vector(values: Iterable[float] | Vector) -> Vector:
-    """把 list[float] / ndarray 统一包装成 pgvector.Vector（幂等，ADR-006）。"""
+    """统一包装向量输入；已是 pgvector.Vector 时保持不变。"""
     if isinstance(values, Vector):
         return values
     return Vector(list(values))
@@ -45,12 +45,9 @@ async def _configure_pool_conn(conn) -> None:
 
 
 async def init_pool() -> bool:
-    """在应用 lifespan 启动时调用。成功返回 True；失败立即降级返回 False（骨架不崩溃、不阻塞启动）。
+    """启动时探测数据库并创建连接池；失败返回 False 且保持降级状态。
 
-    设计要点：
-    - 先用一次性短超时连接探测，避免连接池在无库/Windows Proactor 环境后台反复重试、卡死 startup；
-    - 探测通过后才创建连接池（min_size=0，按需借连）；探测失败则 _pool=None、db_ready=False；
-    - 业务层 get_pool() 在未就绪时统一抛 503，不在启动路径做重试。
+    先使用短超时一次性连接探测，再创建按需连接的连接池；业务层在未就绪时统一抛 503。
     """
     global _pool, db_ready
     db_ready = False
@@ -76,7 +73,7 @@ async def init_pool() -> bool:
         db_ready = True
         logger.info("数据库连接池就绪：max=%d（按需建连）", settings.DB_POOL_MAX)
         return True
-    except Exception as exc:  # noqa: BLE001 - 骨架阶段统一降级，避免启动即退出/阻塞
+    except Exception as exc:  # noqa: BLE001 - 数据库不可用时统一降级，避免启动即退出
         _pool = None
         db_ready = False
         logger.warning("数据库不可用，业务接口将返回服务暂不可用（503）：%s", exc)
@@ -100,7 +97,7 @@ def get_pool() -> AsyncConnectionPool:
 
 
 async def extension_version() -> Optional[str]:
-    """读取 pgvector 扩展版本；DB 不可用返回 None。启动校验使用（§8.1）。"""
+    """读取 pgvector 扩展版本；数据库不可用或查询失败时返回 None。"""
     if not db_ready:
         return None
     pool = get_pool()

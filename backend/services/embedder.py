@@ -40,7 +40,7 @@ class Embedder(Protocol):
 
 
 def _assert_dim(vectors: list[list[float]]) -> None:
-    """运行时维度自检（§5.4）：任一向量维度不符即失败，避免脏数据写入。"""
+    """校验向量维度；发现与配置不符时直接报错，避免写入脏向量数据。"""
     if not vectors:
         return
     expected = settings.EMBEDDING_DIM

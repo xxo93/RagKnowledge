@@ -1,14 +1,13 @@
-"""文档知识库路由（需求 §7.1 / F-01~F-03 / 架构 §7 响应契约 / 设计 §4 权限矩阵）。
+"""文档知识库管理员路由。
 
-- POST /api/docs/upload：后缀白名单 + 大小校验后，交 services.ingest.process 完成
-  解析 → 清洗 → 切片 → 向量化 → T1/T2/T3 事务入库；
+- POST /api/docs/upload：后缀白名单 + 大小校验后，交 services.ingest.process 完成 解析 → 清洗 → 切片 → 向量化 → T1/T2/T3 事务入库；
 - POST /api/docs/upload/batch：服务端顺序处理多文件，聚合 success/failed；
-- GET  /api/docs/list：分页文档列表（F-02），管理员专属；
-- DELETE /api/docs/{doc_id}：单事务删除切片与文档（F-03）；
+- GET  /api/docs/list：分页文档列表，管理员专属；
+- DELETE /api/docs/{doc_id}：单事务删除切片与文档；
 - POST /api/docs/{doc_id}/reparse：后端运维能力，重读原件并事务替换切片；
 - POST /api/docs/reindex：后端运维能力，重建 HNSW 向量索引。
 权限：全部写接口与文档列表均 require_admin；每次写操作落 operation_log。
-SQL 全部收敛在 services/vector_store.py（R2），路由不拼 SQL。
+SQL 全部收敛在 services/vector_store.py，路由不拼 SQL。
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ ALLOWED_EXTS = {".pdf", ".docx", ".md"}
 
 
 def _validate_upload(filename: str, size: int) -> None:
-    """安全前置校验：后缀白名单 + 大小限制（F-01 / §8.4），非法直接拒绝、不落盘。"""
+    """校验文件后缀白名单与大小；校验失败直接拒绝，不落盘、不入库。"""
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise BizError(40002, f"仅支持 {', '.join(sorted(ALLOWED_EXTS))} 文件", http_status=400)
@@ -130,7 +129,7 @@ async def list_docs(
     size: int = Query(10, ge=1, le=100),
     _: dict = Depends(require_admin),
 ):
-    """GET /api/docs/list?page=&size= —— 分页文档列表（F-02）；仅管理员可读。"""
+    """GET /api/docs/list?page=&size= —— 管理员分页读取文档列表。"""
     total, items = await vs.list_documents(page, size)
     return ok({"total": total, "list": items})
 
