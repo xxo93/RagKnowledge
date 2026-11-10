@@ -9,7 +9,7 @@ from fastapi import APIRouter
 
 from config import settings
 from errors import ok
-from db import db_ready, extension_version
+from db import is_ready, extension_version
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -19,7 +19,7 @@ async def system_info():
     pg_version = await extension_version()
     doc_total = None
     chunk_total = None
-    if db_ready:
+    if is_ready():
         try:
             from services import vector_store as vs
             # 复用统计枚举读取总量（DB 就绪后由 M1 联调；失败静默置 None）
@@ -42,7 +42,7 @@ async def system_info():
         "index_type": "hnsw_cosine_ops",
         "max_tool_rounds": settings.MAX_TOOL_ROUNDS,
         "history_rounds": settings.HISTORY_ROUNDS,
-        "db_ready": db_ready,
+        "db_ready": is_ready(),
         "pgvector_version": pg_version,
         "doc_total": doc_total,
         "chunk_total": chunk_total,

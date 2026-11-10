@@ -1,29 +1,41 @@
 <script setup>
-// 文档表格（P-01 / F-02）：名称、状态标签、切片数、上传时间、删除按钮。
-// 状态：0 处理中(warning) / 1 成功(success) / 2 失败(danger + error_msg tooltip)。
-// M1 接通 listDocs / deleteDoc；当前固定列结构与空态。
-import { ref } from 'vue'
-const rows = ref([]) // TODO(M1): 分页加载
+// 文档表格（P-01 / F-02/F-03）：名称、状态标签、切片数、大小、上传时间、重解析与删除；操作由父组件确认后执行。
+defineProps({
+  rows: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
+  processingIds: { type: Array, default: () => [] }
+})
+const emit = defineEmits(['remove', 'reparse'])
+
+// 状态：0 处理中(warning) / 1 成功(success) / 2 失败(danger)
 const statusMap = { 0: '处理中', 1: '成功', 2: '失败' }
+const tagType = (row) => (row.status === 1 ? 'success' : row.status === 2 ? 'danger' : 'warning')
 </script>
 
 <template>
-  <el-table :data="rows" empty-text="暂无文档，上传后在此展示" border>
+  <el-table :data="rows" v-loading="loading" empty-text="暂无文档，上传后在此展示" border>
     <el-table-column prop="doc_name" label="文档名称" min-width="220" />
-    <el-table-column label="状态" width="100">
+    <el-table-column label="状态" width="110">
       <template #default="{ row }">
-        <el-tag :type="row.status === 1 ? 'success' : row.status === 2 ? 'danger' : 'warning'" size="small">
-          {{ statusMap[row.status] || '未知' }}
-        </el-tag>
+        <el-tooltip v-if="row.status === 2 && row.error_msg" :content="row.error_msg" placement="top">
+          <el-tag :type="tagType(row)" size="small">{{ statusMap[row.status] || '未知' }}</el-tag>
+        </el-tooltip>
+        <el-tag v-else :type="tagType(row)" size="small">{{ statusMap[row.status] || '未知' }}</el-tag>
       </template>
     </el-table-column>
     <el-table-column prop="chunk_count" label="切片数" width="90" />
     <el-table-column prop="file_size" label="大小(B)" width="110" />
     <el-table-column prop="create_time" label="上传时间" width="180" />
-    <el-table-column label="操作" width="90">
-      <template #default>
-        <!-- TODO(M1): 删除确认 + emit('remove', doc_id) -->
-        <el-button type="danger" link size="small">删除</el-button>
+    <el-table-column label="操作" width="150">
+      <template #default="{ row }">
+        <el-button
+          type="primary"
+          link
+          size="small"
+          :disabled="processingIds.includes(row.doc_id)"
+          @click="emit('reparse', row)"
+        >重解析</el-button>
+        <el-button type="danger" link size="small" @click="emit('remove', row.doc_id)">删除</el-button>
       </template>
     </el-table-column>
   </el-table>

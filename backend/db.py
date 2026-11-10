@@ -15,7 +15,7 @@ from typing import Any, Iterable, Optional
 
 import psycopg
 from psycopg_pool import AsyncConnectionPool
-from pgvector.psycopg import register_vector
+from pgvector.psycopg import register_vector_async
 from pgvector import Vector
 
 from config import settings
@@ -27,6 +27,11 @@ _pool: Optional[AsyncConnectionPool] = None
 db_ready: bool = False
 
 
+def is_ready() -> bool:
+    """动态读取当前就绪状态（避免调用方用 `from db import db_ready` 取到布尔值快照）。"""
+    return db_ready
+
+
 def to_vector(values: Iterable[float] | Vector) -> Vector:
     """把 list[float] / ndarray 统一包装成 pgvector.Vector（幂等，ADR-006）。"""
     if isinstance(values, Vector):
@@ -34,31 +39,47 @@ def to_vector(values: Iterable[float] | Vector) -> Vector:
     return Vector(list(values))
 
 
+async def _configure_pool_conn(conn) -> None:
+    """异步连接建立后注册 pgvector 类型；AsyncConnectionPool 会 await 本协程。"""
+    await register_vector_async(conn)
+
+
 async def init_pool() -> bool:
-    """在应用 lifespan 启动时调用。成功返回 True；失败记录并返回 False（骨架不崩溃）。"""
+    """在应用 lifespan 启动时调用。成功返回 True；失败立即降级返回 False（骨架不崩溃、不阻塞启动）。
+
+    设计要点：
+    - 先用一次性短超时连接探测，避免连接池在无库/Windows Proactor 环境后台反复重试、卡死 startup；
+    - 探测通过后才创建连接池（min_size=0，按需借连）；探测失败则 _pool=None、db_ready=False；
+    - 业务层 get_pool() 在未就绪时统一抛 503，不在启动路径做重试。
+    """
     global _pool, db_ready
+    db_ready = False
     try:
+        probe = await psycopg.AsyncConnection.connect(
+            settings.DB_DSN, autocommit=True, connect_timeout=3
+        )
+        await register_vector_async(probe)
+        async with probe.cursor() as cur:
+            await cur.execute("SELECT 1")
+            await cur.fetchone()
+        await probe.close()
+
         _pool = AsyncConnectionPool(
             settings.DB_DSN,
-            min_size=settings.DB_POOL_MIN,
+            min_size=0,
             max_size=settings.DB_POOL_MAX,
             open=False,
-            # 每条连接建立后注册向量类型；pool 会在借连接时执行 configure
-            configure=lambda conn: register_vector(conn),
-            kwargs={"autocommit": False},
+            configure=_configure_pool_conn,
+            kwargs={"autocommit": False, "connect_timeout": 3},
         )
         await _pool.open()
-        # 借一条连接做健康探测
-        async with _pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT 1")
-                await cur.fetchone()
         db_ready = True
-        logger.info("数据库连接池就绪：min=%d max=%d", settings.DB_POOL_MIN, settings.DB_POOL_MAX)
+        logger.info("数据库连接池就绪：max=%d（按需建连）", settings.DB_POOL_MAX)
         return True
-    except Exception as exc:  # noqa: BLE001 - 骨架阶段统一降级，避免启动即退出
+    except Exception as exc:  # noqa: BLE001 - 骨架阶段统一降级，避免启动即退出/阻塞
+        _pool = None
         db_ready = False
-        logger.warning("数据库连接不可用，业务接口将返回服务暂不可用：%s", exc)
+        logger.warning("数据库不可用，业务接口将返回服务暂不可用（503）：%s", exc)
         return False
 
 

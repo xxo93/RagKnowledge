@@ -45,14 +45,16 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""                # 必填，骨架阶段允许为空；M2 真实调用前校验
     LLM_MODEL: str = "deepseek-chat"
     LLM_TIMEOUT: int = 60
+    # M4：plan 是否首选 LLM 结构化决策；False 时纯关键词兜底（离线回归 / 控费 / 模型不可用降级）
+    LLM_PLAN_ENABLED: bool = True
 
-    # ---------- Embedding（适配器模式，ADR-008；选型未定先给默认） ----------
+    # ---------- Embedding（适配器模式，ADR-008；当前选型方案②=api，百炼 text-embedding-v3） ----------
     EMBEDDING_PROVIDER: str = "api"      # local / api / ollama
-    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_MODEL: str = "text-embedding-v3"   # 百炼，默认 1024 维，与 vector(1024) 匹配
     EMBEDDING_DIM: int = 1024           # 【高危】必须与 document_chunk.embedding vector(N) 严格一致
-    EMBEDDING_BATCH_SIZE: int = 32
-    EMBEDDING_API_BASE_URL: str = ""
-    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_BATCH_SIZE: int = 10       # 实际单批另受供应商上限约束（v3 OpenAI 兼容模式 ≤10 行）
+    EMBEDDING_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    EMBEDDING_API_KEY: str = ""          # 百炼 API Key（兼容 OpenAI /embeddings）；缺 Key 时入库/检索向量化报 50003
 
     # ---------- 切片 ----------
     CHUNK_SIZE: int = 500
@@ -62,7 +64,10 @@ class Settings(BaseSettings):
     TOP_K: int = 5
     RETRIEVAL_MIN_SCORE: float = 0.0
     RERANK_ENABLED: bool = False
-    RERANK_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    RERANK_MODEL: str = "gte-rerank-v2"
+    RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    RERANK_TOP_N: int = 5        # 重排后保留条数；<=0 表示保留全部候选
+    RERANK_TIMEOUT: int = 10
     HNSW_EF_SEARCH: int = 40
     # pgvector 0.8+ 取值：off / relaxed_order / strict_order；0.7.x 无此项，代码需容错
     HNSW_ITERATIVE_SCAN: str = "relaxed_order"
@@ -71,6 +76,15 @@ class Settings(BaseSettings):
     # ---------- Agent ----------
     HISTORY_ROUNDS: int = 5              # 最近 N 轮（一问一答为一轮）
     MAX_TOOL_ROUNDS: int = 3              # 循环上限，防止死循环（需求 F-06）
+    # assess 后是否允许再规划回跳工具（主循环框架开关）；默认确定性收敛、不额外调用外部模型
+    MULTI_ROUND_ENABLED: bool = True
+    # 是否由 LLM 做再决策（True 会增加 LLM 调用；默认 False 控费，预留扩展点）
+    LLM_REPLAN_ENABLED: bool = False
+
+    # ---------- SSE 心跳 ----------
+    # 流前置阶段（决策 LLM / 向量化 / Rerank）静默期发送 SSE 注释帧 ": ping" 的间隔（秒）；
+    # 前端 sse.js 对 ":" 开头行直接跳过，不产生业务事件，仅用于防止代理/网关静默断连。
+    SSE_HEARTBEAT_SEC: float = 10.0
 
     # ---------- 文件上传 ----------
     UPLOAD_MAX_MB: int = 10
@@ -97,6 +111,10 @@ class Settings(BaseSettings):
         warnings: list[str] = []
         if not self.LLM_API_KEY:
             warnings.append("未配置 LLM_API_KEY，LLM 生成能力不可用（仅影响 M2 之后链路）")
+        if self.EMBEDDING_PROVIDER.lower() == "api" and not self.EMBEDDING_API_KEY:
+            warnings.append("EMBEDDING_PROVIDER=api 但未配置 EMBEDDING_API_KEY，向量化（入库/检索）不可用")
+        if self.RERANK_ENABLED and not self.EMBEDDING_API_KEY:
+            warnings.append("RERANK_ENABLED=true 但未配置 EMBEDDING_API_KEY（Rerank 复用该 Key），重排将回退原序")
         if self.EMBEDDING_DIM <= 0:
             warnings.append("EMBEDDING_DIM 必须为正整数")
         if self.CHUNK_OVERLAP >= self.CHUNK_SIZE:

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import AsyncIterator, Optional
 
@@ -52,6 +53,49 @@ def chat(messages: list[dict], *, temperature: float = 0.3, json_mode: bool = Fa
     return resp.choices[0].message.content or ""
 
 
-def chat_stream(messages: list[dict], *, temperature: float = 0.3) -> AsyncIterator[str]:
-    """流式生成（SSE token 事件来源）。M4 阶段接入；此处为契约占位。"""
-    raise NotImplementedError("流式生成将在 M4 阶段实现")
+async def chat_stream(messages: list[dict], *, temperature: float = 0.3) -> AsyncIterator[str]:
+    """流式生成（SSE token 事件来源，M4 接通）。
+
+    OpenAI SDK 的 stream 迭代是同步阻塞调用，这里用后台线程生产、asyncio.Queue +
+    loop.call_soon_threadsafe 桥接为异步生成器；缺 Key / 超时 / 接口异常统一抛
+    BizError(ERR_LLM_UNAVAILABLE)，由调用方（rag.stream_answer / 图路由）降级，不击穿 SSE。
+    """
+    client = get_client()
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    sentinel = object()
+
+    def _produce() -> None:
+        try:
+            stream = client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=messages,
+                temperature=temperature,
+                stream=True,
+            )
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                text = getattr(chunk.choices[0].delta, "content", None)
+                if text:
+                    loop.call_soon_threadsafe(queue.put_nowait, text)
+        except Exception as exc:  # noqa: BLE001 - 统一经队列上抛，转业务错误
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+    worker = asyncio.create_task(asyncio.to_thread(_produce))
+    try:
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise BizError(ERR_LLM_UNAVAILABLE, "模型流式生成失败，请稍后重试", http_status=503) from item
+            yield item
+    finally:
+        worker.cancel()
+        try:
+            await worker
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass

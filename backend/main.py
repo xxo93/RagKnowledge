@@ -20,8 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from errors import register_exception_handlers, ok
-from logging import register_middlewares
-from db import init_pool, close_pool, db_ready
+from app_logging import register_middlewares
+from db import init_pool, close_pool, is_ready
 from routers import system, docs, session, chat
 
 logger = logging.getLogger("rag.main")
@@ -35,7 +35,7 @@ async def lifespan(_: FastAPI):
     await init_pool()
     logger.info(
         "应用启动：db_ready=%s | LLM=%s | EMBEDDING_DIM=%d | TOP_K=%d",
-        db_ready,
+        is_ready(),
         settings.LLM_MODEL,
         settings.EMBEDDING_DIM,
         settings.TOP_K,
@@ -75,7 +75,7 @@ app.include_router(chat.router)
 @app.get("/health", tags=["meta"])
 async def health():
     """轻量健康检查，不依赖数据库。"""
-    return ok({"status": "up", "db_ready": db_ready, "stage": "skeleton"})
+    return ok({"status": "up", "db_ready": is_ready(), "stage": "skeleton"})
 
 
 @app.get("/", tags=["meta"])

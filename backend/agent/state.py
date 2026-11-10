@@ -45,9 +45,11 @@ class AgentState(TypedDict, total=False):
     observations: list[Observation]
     tool_calls: list[ToolCallRecord]
     sources: list[SourceRef]
+    used_keys: list[str]           # 已执行工具的防重复调用键（tool|规范化args），§4.2 再规划保护
     answer: str
     error: Optional[str]
     finished: bool
+    replan_route: Optional[str]     # replan 节点计算出的下一工具路由（无回跳时为 None）
 
 
 def initial_state(query: str, history: list[dict] | None = None) -> AgentState:
@@ -60,6 +62,7 @@ def initial_state(query: str, history: list[dict] | None = None) -> AgentState:
         observations=[],
         tool_calls=[],
         sources=[],
+        used_keys=[],
         answer="",
         error=None,
         finished=False,

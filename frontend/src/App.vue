@@ -30,7 +30,7 @@ const menus = [
     <el-alert
       type="info"
       :closable="false"
-      title="骨架阶段（M0 前框架搭建）：页面结构与接口契约已就位，业务功能按 M1→M6 里程碑逐步接通。"
+      title="企业文档智能问答（RAG + Agent）：支持知识库语义检索、四则运算与文档统计；对话附工具记录与引用来源。"
       class="stage-tip"
     />
 

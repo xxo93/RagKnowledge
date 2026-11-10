@@ -1,5 +1,9 @@
-// 对话状态编排（架构 §7.2）：会话列表、当前会话、消息流、流式状态与中断控制器。
+// 对话状态编排（架构 §7.2 / P-02）：会话列表、当前会话、消息流、流式状态与中断控制器。
 // MVP 不引入 Pinia；本 composable 在 ChatView 内使用，切换会话时重置消息缓冲（§7.4）。
+// 数据契约对齐后端 M4：
+//   会话 data = { total, list:[{session_id,session_name,create_time,record_count}] }
+//   记录 data = { total, list:[{record_id,query,answer,tool_call_info,source_ref,create_time}] }
+//   SSE handlers = onTool/onToken/onSource/onDone/onError/onAbort（见 api/sse.js）
 import { reactive, shallowRef } from 'vue'
 import { listSessions, createSession, deleteSession, listRecords } from '../api/chat'
 import { streamChat } from '../api/sse'
@@ -8,55 +12,146 @@ export function useChat() {
   const state = reactive({
     sessions: [],
     currentSessionId: null,
-    messages: [],          // [{role:'user'|'assistant', content, toolCalls:[], sources:[]}]
+    messages: [], // [{role, content, toolCalls:[{name,label,status,round}], sources:[{doc_name,chunk_index,score,snippet}], streaming, error}]
     streaming: false,
-    toolStatus: null       // 当前进行中的工具提示 {name,label,status,round}
+    toolStatus: null // 当前进行中的工具提示 {name,label,status,round}
   })
   const client = shallowRef(null) // { abort }
 
   async function loadSessions() {
-    // TODO(M4): const data = await listSessions(); state.sessions = data.list || []
-    state.sessions = []
+    try {
+      const data = await listSessions()
+      state.sessions = data?.list || []
+    } catch (_) {
+      state.sessions = []
+    }
   }
 
   async function createNewSession() {
-    // TODO(M4): const s = await createSession(); state.currentSessionId = s.session_id; 清空 messages
-    return null
+    try {
+      const s = await createSession('新会话')
+      state.currentSessionId = s.session_id
+      state.messages = []
+      state.toolStatus = null
+      await loadSessions()
+      return s.session_id
+    } catch (e) {
+      state.messages.push({
+        role: 'assistant', content: `会话创建失败：${e.message || '请确认后端已启动'}`,
+        toolCalls: [], sources: [], error: true
+      })
+      return null
+    }
   }
 
   async function selectSession(sessionId) {
-    // 先清空再拉取历史回填，避免串会话（§7.4）
+    if (state.streaming) stop() // 流式切换先中断，避免两套流写同一缓冲
     state.currentSessionId = sessionId
     state.messages = []
-    // TODO(M4): const data = await listRecords(sessionId); 按时间正序回填 messages
+    state.toolStatus = null
+    try {
+      const data = await listRecords(sessionId)
+      const msgs = []
+      for (const r of (data?.list || [])) {
+        msgs.push({ role: 'user', content: r.query, toolCalls: [], sources: [] })
+        msgs.push({
+          role: 'assistant',
+          content: r.answer || '',
+          toolCalls: r.tool_call_info || [],
+          sources: r.source_ref || []
+        })
+      }
+      state.messages = msgs
+    } catch (e) {
+      state.messages.push({
+        role: 'assistant', content: `历史记录加载失败：${e.message || ''}`,
+        toolCalls: [], sources: [], error: true
+      })
+    }
   }
 
   async function removeSession(sessionId) {
-    // TODO(M4): await deleteSession(sessionId); 刷新列表；若删除当前会话则重置
+    if (state.streaming) stop() // 删除前先中断进行中的流，避免对已删除会话继续写入（S3 竞态加固）
+    try {
+      await deleteSession(sessionId)
+      if (state.currentSessionId === sessionId) {
+        state.currentSessionId = null
+        state.messages = []
+        state.toolStatus = null
+      }
+      await loadSessions()
+    } catch (_) { /* http 拦截器统一提示，这里保持静默不阻塞列表 */ }
   }
 
-  function sendMessage(query) {
-    if (state.streaming || !query.trim()) return
-    if (!state.currentSessionId) state.currentSessionId = null // TODO(M4): 未建会话先自动建
+  async function sendMessage(query) {
+    const q = (query || '').trim()
+    if (state.streaming || !q) return
 
-    state.messages.push({ role: 'user', content: query })
-    const assistant = reactive({ role: 'assistant', content: '', toolCalls: [], sources: [] })
+    // 后端 /api/chat/stream 要求会话存在；无当前会话先自动新建（F-10）
+    let sid = state.currentSessionId
+    if (!sid) {
+      sid = await createNewSession()
+      if (!sid) return
+    }
+
+    state.messages.push({ role: 'user', content: q, toolCalls: [], sources: [] })
+    const assistant = reactive({
+      role: 'assistant', content: '', toolCalls: [], sources: [],
+      streaming: true, error: false
+    })
     state.messages.push(assistant)
     state.streaming = true
+    state.toolStatus = null
 
-    // TODO(M3/M4): 接通 streamChat，回调更新 assistant.content / toolCalls / sources
-    // onTool  -> state.toolStatus / assistant.toolCalls
-    // onToken -> assistant.content += text
-    // onSource-> assistant.sources = sources
-    // onDone  -> state.streaming=false; 清空 toolStatus
-    // onError -> 气泡内展示 msg；onAbort -> 复位 streaming
-    client.value = { abort() {} }
-    state.streaming = false // 骨架占位：实际由事件回调收尾
+    client.value = streamChat({ session_id: sid, query: q }, {
+      onTool(t) {
+        assistant.toolCalls.push({ ...t })
+        state.toolStatus = t
+      },
+      onToken({ text }) {
+        assistant.content += text || ''
+      },
+      onSource({ sources }) {
+        assistant.sources = sources || []
+      },
+      // 事件 done 帧与读取结束都可能触发，保持幂等复位
+      onDone(data) {
+        assistant.streaming = false
+        state.streaming = false
+        state.toolStatus = null
+        client.value = null
+        // 后端 saved=false 表示本次回答未落库（会话竞态删除等），轻提示但不标错误
+        if (data && data.saved === false) {
+          assistant.content = assistant.content
+            ? assistant.content + '\n（本次回答未保存到历史：会话已失效）'
+            : '（本次回答未保存到历史：会话已失效）'
+        }
+        loadSessions().catch(() => {}) // 刷新会话记录数；失败静默
+      },
+      onError({ code, msg }) {
+        assistant.error = true
+        assistant.streaming = false
+        assistant.content =
+          (assistant.content ? assistant.content + '\n' : '') + `⚠ ${msg || '请求失败'}${code ? `（${code}）` : ''}`
+        state.streaming = false
+        state.toolStatus = null
+        client.value = null
+      },
+      onAbort() {
+        assistant.streaming = false
+        assistant.content = assistant.content
+          ? assistant.content + '\n（已中断回答）'
+          : '（已中断回答）'
+        state.streaming = false
+        state.toolStatus = null
+        client.value = null
+      }
+    })
   }
 
   function stop() {
-    // 中断 SSE；finally 复位 streaming、恢复输入框（§3.5）
     client.value?.abort?.()
+    // 最终复位由 onAbort/onError 完成；此处兜底，避免异常情况下输入框永久禁用
     state.streaming = false
     state.toolStatus = null
   }

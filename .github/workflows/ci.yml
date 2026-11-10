@@ -1,0 +1,69 @@
+# 离线回归流水线（零外部模型调用、零数据库依赖、零密钥）。
+#
+# 范围（刻意收窄，保证 CI 在干净 Linux 环境可稳定复现）：
+#   backend-offline：安装后端依赖 -> pytest 纯离线单测 -> check_env 导入/装配自检 -> 全量静态编译；
+#   frontend-build  ：安装前端依赖 -> vite 生产构建。
+# 不纳入 CI 的内容（需本地有 PostgreSQL / 真实 Embedding、Rerank、LLM Key，且可能产生费用或写库）：
+#   所有依赖 db.init_pool() 的 scripts（检索/入库/对话/重排/造数等）、联网评测脚本。
+#   这些脚本的本地执行方式见 README「常用回归命令」，默认离线的脚本（如 check_replan_live.py）
+#   可在本地零费用复跑；本流水线不重复执行它们。
+name: offline-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-offline:
+    name: backend offline tests & assembly
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Offline unit tests (pytest, no DB / no network)
+        run: python -m pytest tests -q
+
+      - name: Import & FastAPI assembly self-check (no DB, no LLM)
+        run: python scripts/check_env.py
+
+      - name: Static byte-compile (compile only, no execution, no network)
+        run: python -m compileall -q .
+
+  frontend-build:
+    name: frontend production build
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Vite production build
+        run: npm run build

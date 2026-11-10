@@ -27,6 +27,7 @@ async def run(query: str) -> dict:
             "ok": True,
             "answer": result.answer,
             "sources": result.sources,
+            "hits": result.hits,
             "error": None,
         }
     except Exception as exc:  # noqa: BLE001 - 工具异常回传，不击穿状态图

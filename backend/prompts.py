@@ -29,6 +29,20 @@ PLAN_SYSTEM_PROMPT = (
     "输出 JSON Schema：{\"tool\": str|null, \"args\": object, \"reason\": str}"
 )
 
+# ---------- Agent 再规划提示（replan 节点，结构化 JSON 输出；默认关闭）----------
+# 契约：{"next_tool": "knowledge_search|calculator|doc_stats|null", "args": object, "reason": str}
+REPLAN_SYSTEM_PROMPT = (
+    "你是 Agent 多轮再规划决策器。基于用户原始问题与已执行工具的观察结果，判断是否还需要再调用一个工具；"
+    "只输出 JSON，不要解释文字。\n"
+    "可选工具与参数：\n"
+    "- knowledge_search：补充检索知识库，args.query 为检索词（可换更具体或更宽泛的措辞）；\n"
+    "- calculator：补充纯数学计算，args.expression 为仅含数字与四则运算符的算式；\n"
+    "- doc_stats：补充统计，args.stat_type 限于 total_docs/success_docs/failed_docs/total_chunks；\n"
+    "- 若已有足够信息、再调用无意义，或会与已执行的相同工具相同参数重复，则 next_tool 输出 null。\n"
+    "硬约束：不得重复已执行过的（工具 + 相同参数）；没有把握收敛时优先 null。\n"
+    "输出 JSON Schema：{\"next_tool\": str|null, \"args\": object, \"reason\": str}"
+)
+
 # ---------- 关键词兜底规则（LLM 不可用或解析失败时使用，架构 §4.3）----------
 # 纯算式正则：仅数字与运算符、括号、小数点、空白
 CALC_EXPR_PATTERN = r"^[\d\s+\-*/().]+$"

@@ -6,6 +6,7 @@ const typeMap = { running: 'warning', done: 'success' }
 
 <template>
   <el-tag size="small" :type="typeMap[tool.status] || 'info'" effect="plain">
-    {{ tool.status === 'running' ? '⏳ ' : '✔ ' }}{{ tool.label || tool.name }}
+    {{ tool.status === 'running' ? '⏳ ' : '✔ ' }}{{ tool.label || tool.name
+    }}<span v-if="Number(tool.round) >= 1"> · 第{{ Number(tool.round) + 1 }}轮</span>
   </el-tag>
 </template>
