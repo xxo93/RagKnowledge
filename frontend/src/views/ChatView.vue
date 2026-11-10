@@ -2,12 +2,13 @@
 // 对话页（需求 P-02 / F-08）：左会话列表 + 右消息流（流式渲染 / 工具标签 / 来源卡片）+ 底部输入框。
 // M5 接通：onMounted 加载会话并默认选中最近会话；消息深度变化自动滚动到底；工具进行中状态条。
 import { ref, watch, nextTick, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChat } from '../composables/useChat'
 import SessionList from '../components/SessionList.vue'
 import MessageBubble from '../components/MessageBubble.vue'
 import ChatInput from '../components/ChatInput.vue'
 
-const { state, loadSessions, createNewSession, selectSession, removeSession, sendMessage, stop } = useChat()
+const { state, loadSessions, createNewSession, selectSession, removeSession, renameSession, sendMessage, stop } = useChat()
 
 const listRef = ref(null)
 
@@ -19,6 +20,24 @@ async function scrollToBottom() {
 
 // token 增量 / 工具 / 来源变化都触发跟随滚动
 watch(() => state.messages, () => scrollToBottom(), { deep: true })
+
+async function onRename(session) {
+  let name
+  try {
+    const result = await ElMessageBox.prompt('请输入新的会话名称', '重命名会话', {
+      inputValue: session.session_name,
+      inputPattern: /\S+/,
+      inputErrorMessage: '名称不能为空',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消'
+    })
+    name = result.value
+  } catch (_) {
+    return // 用户取消
+  }
+  const ok = await renameSession(session.session_id, name)
+  if (ok) ElMessage.success('会话已重命名')
+}
 
 onMounted(async () => {
   await loadSessions()
@@ -36,6 +55,7 @@ onMounted(async () => {
         :current-id="state.currentSessionId"
         @new="createNewSession"
         @select="selectSession"
+        @rename="onRename"
         @remove="removeSession"
       />
     </el-col>

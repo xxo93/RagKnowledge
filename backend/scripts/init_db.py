@@ -28,9 +28,18 @@ from config import settings  # noqa: E402
 SQL_FILE = BACKEND_DIR / "init_db.sql"
 
 
+def _strip_line_comments(sql: str) -> str:
+    """去掉 `--` 行注释，避免注释里的分号被误当作语句分隔符。"""
+    kept = []
+    for line in sql.splitlines():
+        idx = line.find("--")
+        kept.append(line if idx < 0 else line[:idx])
+    return "\n".join(kept)
+
+
 def _split_statements(sql: str) -> list[str]:
     """按分号拆分 DDL；本项目 DDL 无存储过程体，简单拆分即可。"""
-    return [s.strip() for s in sql.split(";") if s.strip()]
+    return [s.strip() for s in _strip_line_comments(sql).split(";") if s.strip()]
 
 
 def verify(cur) -> list[str]:

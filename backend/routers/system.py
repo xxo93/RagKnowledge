@@ -1,21 +1,23 @@
-"""系统信息接口 GET /api/system/info（需求 §7.4 / 架构 §6.2）。
+"""系统信息接口 GET /api/system/info（需求 §7.4 / 架构 §6.2 / 设计 §4 权限矩阵）。
 
 只返回前端展示用的非敏感元信息；严禁返回 API Key、数据库连接串、文件绝对路径（§6.2）。
 数据库不可用时 db_ready=False、统计量为 null，不影响接口本身返回。
+权限：仅管理员（权限矩阵：查看系统统计与索引信息 = admin）。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from config import settings
 from errors import ok
 from db import is_ready, extension_version
+from services.auth_deps import require_admin
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 
 @router.get("/info")
-async def system_info():
+async def system_info(_: dict = Depends(require_admin)):
     pg_version = await extension_version()
     doc_total = None
     chunk_total = None

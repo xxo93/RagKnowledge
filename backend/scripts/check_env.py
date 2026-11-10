@@ -44,15 +44,24 @@ INTERNAL = [
     "services.embedder", "services.vector_store", "services.rag",
     "services.ingest", "services.memory", "services.reranker",
     "services.maintenance",
+    "services.security", "services.account_store", "services.auth_deps", "services.audit",
     "agent.state", "agent.graph", "agent.decision",
     "agent.tools.calc_tool", "agent.tools.search_tool", "agent.tools.doc_stats_tool",
     "services.chat_store",
     "routers.docs", "routers.session", "routers.chat", "routers.system",
+    "routers.auth", "routers.admin",
 ]
 
 
 def main() -> int:
     fail = 0
+
+    # Windows 控制台默认 GBK，末尾的 ✅/❌ 会抛 UnicodeEncodeError 让脚本以异常收场；
+    # 这里只放宽编码错误处理，不改变任何检测逻辑与输出语义。
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:  # noqa: BLE001 - 极老环境或已重定向时不支持 reconfigure
+        pass
 
     print("== 1. 第三方 pip 依赖 ==")
     for mod_name, pkg, required in THIRD_PARTY:
@@ -90,17 +99,23 @@ def main() -> int:
             methods = ",".join(spec["paths"][p].keys()).upper()
             print(f"        - [{methods:6s}] {p}")
 
-        # 不进入 with（不触发 lifespan，因此不连接数据库），仅验证路由可达、无 5xx
+        # 不进入 with（不触发 lifespan，因此不连接数据库），仅验证路由可达、无 5xx。
+        # /api/system/info 已收为管理员专属：未登录时 401 才是正确结果。
         try:
             from fastapi.testclient import TestClient
 
             client = TestClient(app_module.app)
-            for url in ("/health", "/api/system/info"):
+            expectations = {"/health": (200,), "/api/system/info": (200, 401)}
+            for url, expected in expectations.items():
                 resp = client.get(url)
-                if resp.status_code < 500:
-                    print(f"  [OK] GET {url} -> HTTP {resp.status_code}")
-                else:
+                if resp.status_code >= 500:
                     print(f"  [FAIL] GET {url} -> HTTP {resp.status_code}：{resp.text[:200]}")
+                    fail += 1
+                elif resp.status_code in expected:
+                    note = "（未登录 401，鉴权生效）" if resp.status_code == 401 else ""
+                    print(f"  [OK] GET {url} -> HTTP {resp.status_code}{note}")
+                else:
+                    print(f"  [FAIL] GET {url} -> HTTP {resp.status_code}（预期 {expected}）")
                     fail += 1
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] TestClient 探活跳过（不影响导入结论）：{type(exc).__name__}: {exc}")

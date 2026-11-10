@@ -5,7 +5,7 @@
 //   记录 data = { total, list:[{record_id,query,answer,tool_call_info,source_ref,create_time}] }
 //   SSE handlers = onTool/onToken/onSource/onDone/onError/onAbort（见 api/sse.js）
 import { reactive, shallowRef } from 'vue'
-import { listSessions, createSession, deleteSession, listRecords } from '../api/chat'
+import { listSessions, createSession, deleteSession, renameSession as renameSessionApi, listRecords } from '../api/chat'
 import { streamChat } from '../api/sse'
 
 export function useChat() {
@@ -63,10 +63,31 @@ export function useChat() {
       }
       state.messages = msgs
     } catch (e) {
-      state.messages.push({
-        role: 'assistant', content: `历史记录加载失败：${e.message || ''}`,
-        toolCalls: [], sources: [], error: true
-      })
+      // 会话可能已被删除、或（历史）不属于当前用户：立即清空选中并刷新本人列表，
+      // 不保留指向他人/不存在会话的选中态（设计 §8.2）。
+      state.currentSessionId = null
+      state.messages = []
+      state.toolStatus = null
+      await loadSessions()
+      if (e.bizCode !== 40101 && e.httpStatus !== 401) {
+        state.messages.push({
+          role: 'assistant', content: `历史记录加载失败：${e.message || ''}`,
+          toolCalls: [], sources: [], error: true
+        })
+      }
+    }
+  }
+
+  async function renameSession(sessionId, name) {
+    const clean = (name || '').trim()
+    if (!clean) return false
+    try {
+      await renameSessionApi(sessionId, clean)
+      await loadSessions()
+      return true
+    } catch (_) {
+      // 失败提示由 http 拦截器统一处理；返回 false 让调用方保持编辑态
+      return false
     }
   }
 
@@ -156,5 +177,5 @@ export function useChat() {
     state.toolStatus = null
   }
 
-  return { state, loadSessions, createNewSession, selectSession, removeSession, sendMessage, stop }
+  return { state, loadSessions, createNewSession, selectSession, removeSession, renameSession, sendMessage, stop }
 }

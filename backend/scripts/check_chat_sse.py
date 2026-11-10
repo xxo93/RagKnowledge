@@ -35,7 +35,7 @@ from config import settings  # noqa: E402
 settings.LLM_PLAN_ENABLED = os.environ.get("REAL_LLM") == "1"
 
 import db  # noqa: E402
-from services import chat_store, memory, rag as rag_svc  # noqa: E402
+from services import account_store, chat_store, memory, rag as rag_svc  # noqa: E402
 import agent.graph as graph  # noqa: E402
 import llm as llm_mod  # noqa: E402
 
@@ -51,9 +51,13 @@ async def main() -> int:
     tmp_sid: int | None = None
 
     # ---------------- A. 仓储闭环（本地 PG） ----------------
+    admin_id = None
     if db_ready:
+        admin_id = await account_store.get_first_admin_id()
+
+    if db_ready and admin_id is not None:
         try:
-            created = await chat_store.create_session("M4回归临时会话")
+            created = await chat_store.create_session(admin_id, "M4回归临时会话")
             tmp_sid = int(created["session_id"])
             await chat_store.insert_record(
                 tmp_sid, "问题A", "答案A",
@@ -82,21 +86,26 @@ async def main() -> int:
             check("A4 memory.load_recent 角色成对且时间正序",
                   roles == ["user", "assistant", "user", "assistant"], f"roles={roles}")
 
-            sessions = await chat_store.list_sessions()
+            sessions = await chat_store.list_sessions(admin_id)
             check("A5 会话列表包含临时会话", any(s["session_id"] == tmp_sid for s in sessions))
 
-            await chat_store.delete_session(tmp_sid)
-            check("A6 删除会话后 get 返回 None", await chat_store.get_session(tmp_sid) is None)
+            await chat_store.delete_session(tmp_sid, admin_id)
+            check("A6 删除会话后归属校验返回 None",
+                  await chat_store.get_session_for_user(tmp_sid, admin_id) is None)
             check("A7 删除会话后记录级联清空", await chat_store.list_records(tmp_sid) == [])
         finally:
             # 兜底清理：断言失败也尽力删除临时会话
-            if tmp_sid is not None:
+            if tmp_sid is not None and admin_id is not None:
                 try:
-                    await chat_store.delete_session(tmp_sid)
+                    await chat_store.delete_session(tmp_sid, admin_id)
                 except Exception:  # noqa: BLE001
                     pass
     else:
-        check("A 仓储闭环（DB 不可用，SKIP）", True, "db_ready=False")
+        check(
+            "A 仓储闭环（DB 不可用或无 admin，SKIP）",
+            True,
+            f"db_ready={db_ready}, admin_id={admin_id}",
+        )
 
     # ---------------- B. 确定性工具离线回归 ----------------
     st = await graph.run_once("1234*56")

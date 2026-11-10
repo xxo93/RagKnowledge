@@ -1,7 +1,8 @@
 <script setup>
-// 会话列表（P-02 / F-10）：新建 / 切换 / 删除；按创建时间倒序。
+// 会话列表（P-02 / F-10）：新建 / 切换 / 重命名 / 删除；按创建时间倒序。
+// 会话归属由后端强制校验，前端只做交互入口。
 defineProps({ sessions: { type: Array, default: () => [] }, currentId: { type: [Number, null], default: null } })
-defineEmits(['new', 'select', 'remove'])
+defineEmits(['new', 'select', 'rename', 'remove'])
 </script>
 
 <template>
@@ -20,8 +21,11 @@ defineEmits(['new', 'select', 'remove'])
         :class="{ active: s.session_id === currentId }"
         @click="$emit('select', s.session_id)"
       >
-        <span class="name">{{ s.session_name }}</span>
-        <el-button link size="small" type="danger" @click.stop="$emit('remove', s.session_id)">删除</el-button>
+        <span class="name" :title="s.session_name">{{ s.session_name }}</span>
+        <span class="ops">
+          <el-button link size="small" @click.stop="$emit('rename', s)">重命名</el-button>
+          <el-button link size="small" type="danger" @click.stop="$emit('remove', s.session_id)">删除</el-button>
+        </span>
       </li>
     </ul>
   </el-card>
@@ -30,7 +34,8 @@ defineEmits(['new', 'select', 'remove'])
 <style scoped>
 .head { display: flex; justify-content: space-between; align-items: center; }
 .session-list { list-style: none; margin: 0; padding: 0; }
-.session-list li { display: flex; justify-content: space-between; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.session-list li { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .session-list li.active { background: #ecf5ff; }
-.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.ops { display: flex; align-items: center; white-space: nowrap; }
 </style>

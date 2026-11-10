@@ -11,6 +11,10 @@ class SessionCreate(BaseModel):
     session_name: str = Field(default="新会话", max_length=128)
 
 
+class SessionRename(BaseModel):
+    session_name: str = Field(min_length=1, max_length=128)
+
+
 class SessionItem(BaseModel):
     session_id: int
     session_name: str

@@ -15,7 +15,7 @@ from typing import Optional
 import psycopg
 
 from db import get_pool
-from errors import BizError, ERR_SESSION_NOT_FOUND
+from errors import BizError, ERR_PARAM, ERR_SESSION_NOT_FOUND
 
 logger = logging.getLogger("rag.chat_store")
 
@@ -31,8 +31,8 @@ def _json(value) -> Optional[str]:
 
 
 # ---------------- chat_session ----------------
-async def create_session(session_name: str) -> dict:
-    """新建会话，默认“新会话”；返回 {session_id, session_name, create_time}。"""
+async def create_session(user_id: int, session_name: str) -> dict:
+    """新建当前用户私有会话；返回 {session_id, session_name, create_time}。"""
     pool = get_pool()
     name = (session_name or "新会话").strip() or "新会话"
     name = name[:128]
@@ -41,18 +41,18 @@ async def create_session(session_name: str) -> dict:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    INSERT INTO chat_session (session_name)
-                    VALUES (%(n)s)
+                    INSERT INTO chat_session (user_id, session_name)
+                    VALUES (%(uid)s, %(n)s)
                     RETURNING session_id, session_name, create_time
                     """,
-                    {"n": name},
+                    {"uid": int(user_id), "n": name},
                 )
                 row = await cur.fetchone()
                 return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
 
 
-async def get_session(session_id: int) -> Optional[dict]:
-    """会话存在性校验；不存在返回 None（由调用方决定是否抛 40402）。"""
+async def _get_session(session_id: int) -> Optional[dict]:
+    """内部存在性校验；不做用户归属判断，供记录落库竞态保护使用。"""
     pool = get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
@@ -69,8 +69,27 @@ async def get_session(session_id: int) -> Optional[dict]:
             return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
 
 
-async def list_sessions(limit: int = DEFAULT_SESSION_LIMIT) -> list[dict]:
-    """按创建时间（session_id）倒序列出，并冗余统计记录条数。"""
+async def get_session_for_user(session_id: int, user_id: int) -> Optional[dict]:
+    """返回属于指定用户的会话；越权访问与不存在统一由路由判定为不可见。"""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT s.session_id, s.session_name, s.create_time
+                FROM chat_session s
+                WHERE s.session_id = %(id)s AND s.user_id = %(uid)s
+                """,
+                {"id": session_id, "uid": int(user_id)},
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
+
+
+async def list_sessions(user_id: int, limit: int = DEFAULT_SESSION_LIMIT) -> list[dict]:
+    """按创建时间（session_id）倒序列出当前用户会话，并冗余统计记录条数。"""
     pool = get_pool()
     limit = max(1, min(int(limit or DEFAULT_SESSION_LIMIT), 500))
     async with pool.connection() as conn:
@@ -80,30 +99,69 @@ async def list_sessions(limit: int = DEFAULT_SESSION_LIMIT) -> list[dict]:
                 SELECT s.session_id, s.session_name, s.create_time,
                        (SELECT count(*) FROM chat_record r WHERE r.session_id = s.session_id) AS record_count
                 FROM chat_session s
+                WHERE s.user_id = %(uid)s
                 ORDER BY s.session_id DESC
                 LIMIT %(lim)s
                 """,
-                {"lim": limit},
+                {"uid": int(user_id), "lim": limit},
             )
             cols = [c.name for c in cur.description]
             return [dict(zip(cols, row)) for row in await cur.fetchall()]
 
 
-async def delete_session(session_id: int) -> None:
-    """删除会话及其全部记录（单事务）；主表无该行 -> 40402。"""
+async def rename_session(session_id: int, user_id: int, session_name: str) -> dict:
+    """重命名本人会话；非 owner 或不存在 -> 40402（不泄露他人会话是否存在）。"""
+    name = (session_name or "").strip()
+    if not name:
+        raise BizError(ERR_PARAM, "会话名称不能为空", http_status=400)
+    name = name[:128]
     pool = get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "DELETE FROM chat_record WHERE session_id = %(id)s", {"id": session_id}
+                    """
+                    UPDATE chat_session
+                    SET session_name = %(n)s
+                    WHERE session_id = %(id)s AND user_id = %(uid)s
+                    RETURNING session_id, session_name, create_time
+                    """,
+                    {"n": name, "id": int(session_id), "uid": int(user_id)},
                 )
+                row = await cur.fetchone()
+                if row is None:
+                    raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问", http_status=404)
+                return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
+
+
+async def delete_session(session_id: int, user_id: int) -> None:
+    """删除用户本人会话及其全部记录（单事务）；非 owner 或不存在 -> 40402。
+
+    先按 owner 锁定会话再删记录：若直接按 session_id 删记录，越权请求会在返回 404
+    之前就把他人的聊天记录清空（跨用户数据销毁）。
+    """
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
                 await cur.execute(
-                    "DELETE FROM chat_session WHERE session_id = %(id)s RETURNING session_id",
-                    {"id": session_id},
+                    """
+                    SELECT session_id FROM chat_session
+                    WHERE session_id = %(id)s AND user_id = %(uid)s
+                    FOR UPDATE
+                    """,
+                    {"id": int(session_id), "uid": int(user_id)},
                 )
                 if await cur.fetchone() is None:
                     raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或已删除", http_status=404)
+
+                await cur.execute(
+                    "DELETE FROM chat_record WHERE session_id = %(id)s", {"id": int(session_id)}
+                )
+                await cur.execute(
+                    "DELETE FROM chat_session WHERE session_id = %(id)s AND user_id = %(uid)s",
+                    {"id": int(session_id), "uid": int(user_id)},
+                )
 
 
 # ---------------- chat_record ----------------
@@ -120,7 +178,7 @@ async def insert_record(
     前置存在性校验不通过则直接返回 None、不落库不抛错；外键冲突同样降级为 None，
     由路由在 done 帧以 saved=false 告知前端，避免裸 FK 异常堆栈与脏写。
     """
-    if await get_session(session_id) is None:
+    if await _get_session(session_id) is None:
         logger.warning("会话 %s 已不存在，跳过记录落库（竞态删除）", session_id)
         return None
 

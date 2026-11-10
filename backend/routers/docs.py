@@ -1,12 +1,13 @@
-"""文档知识库路由（需求 §7.1 / F-01~F-03 / 架构 §7 响应契约）。
+"""文档知识库路由（需求 §7.1 / F-01~F-03 / 架构 §7 响应契约 / 设计 §4 权限矩阵）。
 
 - POST /api/docs/upload：后缀白名单 + 大小校验后，交 services.ingest.process 完成
   解析 → 清洗 → 切片 → 向量化 → T1/T2/T3 事务入库；
 - POST /api/docs/upload/batch：服务端顺序处理多文件，聚合 success/failed；
-- GET  /api/docs/list：分页文档列表（F-02）；
+- GET  /api/docs/list：分页文档列表（F-02），管理员专属；
 - DELETE /api/docs/{doc_id}：单事务删除切片与文档（F-03）；
 - POST /api/docs/{doc_id}/reparse：后端运维能力，重读原件并事务替换切片；
 - POST /api/docs/reindex：后端运维能力，重建 HNSW 向量索引。
+权限：全部写接口与文档列表均 require_admin；每次写操作落 operation_log。
 SQL 全部收敛在 services/vector_store.py（R2），路由不拼 SQL。
 """
 from __future__ import annotations
@@ -14,11 +15,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Query
 
 from errors import BizError, ok, ERR_INGEST_FAILED
 from config import settings
-from services import ingest, vector_store as vs, maintenance
+from services import audit, ingest, vector_store as vs, maintenance
+from services.auth_deps import require_admin
 
 logger = logging.getLogger("rag.docs")
 
@@ -49,15 +51,19 @@ async def _process_single_upload(file: UploadFile) -> dict:
 
 
 @router.post("/upload")
-async def upload_doc(file: UploadFile = File(...)):
-    """POST /api/docs/upload —— 同步处理并入库；返回 {"doc_id","chunk_count","status"}。"""
+async def upload_doc(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """POST /api/docs/upload —— 管理员同步处理并入库；返回 {"doc_id","chunk_count","status"}。"""
     result = await _process_single_upload(file)
+    await audit.log_operation(
+        user["user_id"], audit.DOC_UPLOAD, "document", result["doc_id"], 1,
+        {"file_name": file.filename, "chunk_count": result["chunk_count"]},
+    )
     return ok(result)
 
 
 @router.post("/upload/batch")
-async def upload_batch(files: list[UploadFile] = File(...)):
-    """POST /api/docs/upload/batch —— 服务端顺序处理多文件，聚合成功/失败明细。"""
+async def upload_batch(files: list[UploadFile] = File(...), user: dict = Depends(require_admin)):
+    """POST /api/docs/upload/batch —— 管理员顺序处理多文件，聚合成功/失败明细。"""
     success: list[dict] = []
     failed: list[dict] = []
     for file in files:
@@ -70,8 +76,16 @@ async def upload_batch(files: list[UploadFile] = File(...)):
                 "chunk_count": result["chunk_count"],
                 "status": result["status"],
             })
+            await audit.log_operation(
+                user["user_id"], audit.DOC_UPLOAD, "document", result["doc_id"], 1,
+                {"file_name": name, "chunk_count": result["chunk_count"], "batch": True},
+            )
         except BizError as exc:
             failed.append({"file_name": name, "code": exc.code, "error": exc.msg})
+            await audit.log_operation(
+                user["user_id"], audit.DOC_UPLOAD, "document", None, 0,
+                {"file_name": name, "batch": True, "reason": exc.code},
+            )
         except Exception:  # noqa: BLE001 - 批量场景单文件失败不中断其余文件
             logger.exception("批量上传处理失败：%s", name)
             failed.append({
@@ -79,6 +93,10 @@ async def upload_batch(files: list[UploadFile] = File(...)):
                 "code": ERR_INGEST_FAILED,
                 "error": "文档处理失败，请查看后端日志",
             })
+            await audit.log_operation(
+                user["user_id"], audit.DOC_UPLOAD, "document", None, 0,
+                {"file_name": name, "batch": True, "reason": "exception"},
+            )
     return ok({
         "success": success,
         "failed": failed,
@@ -88,26 +106,41 @@ async def upload_batch(files: list[UploadFile] = File(...)):
 
 
 @router.post("/{doc_id}/reparse")
-async def reparse_doc(doc_id: int):
-    """POST /api/docs/{doc_id}/reparse —— 重读原件、重切片、重向量化并事务替换切片。"""
-    return ok(await maintenance.reparse_document(doc_id))
+async def reparse_doc(doc_id: int, user: dict = Depends(require_admin)):
+    """POST /api/docs/{doc_id}/reparse —— 管理员重读原件、重切片、重向量化并事务替换切片。"""
+    result = await maintenance.reparse_document(doc_id)
+    await audit.log_operation(
+        user["user_id"], audit.REPARSE, "document", doc_id, 1,
+        {"old_chunks": result.get("old_chunks"), "new_chunks": result.get("new_chunks")},
+    )
+    return ok(result)
 
 
 @router.post("/reindex")
-async def rebuild_vector_index():
-    """POST /api/docs/reindex —— 重建 HNSW 向量索引（纯 DDL，不改变文档内容）。"""
-    return ok(await maintenance.rebuild_vector_index())
+async def rebuild_vector_index(user: dict = Depends(require_admin)):
+    """POST /api/docs/reindex —— 管理员重建 HNSW 向量索引（纯 DDL，不改变文档内容）。"""
+    result = await maintenance.rebuild_vector_index()
+    await audit.log_operation(user["user_id"], audit.REINDEX, "index", "idx_chunk_embedding", 1)
+    return ok(result)
 
 
 @router.get("/list")
-async def list_docs(page: int = Query(1, ge=1), size: int = Query(10, ge=1, le=100)):
-    """GET /api/docs/list?page=&size= —— 分页文档列表（F-02）。"""
+async def list_docs(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    _: dict = Depends(require_admin),
+):
+    """GET /api/docs/list?page=&size= —— 分页文档列表（F-02）；仅管理员可读。"""
     total, items = await vs.list_documents(page, size)
     return ok({"total": total, "list": items})
 
 
 @router.delete("/{doc_id}")
-async def delete_doc(doc_id: int):
-    """DELETE /api/docs/{doc_id} —— 单事务删除切片与文档（F-03）；返回 {"deleted_chunks": n}。"""
+async def delete_doc(doc_id: int, user: dict = Depends(require_admin)):
+    """DELETE /api/docs/{doc_id} —— 管理员单事务删除切片与文档；返回 {"deleted_chunks": n}。"""
     deleted_chunks = await vs.delete_document(doc_id)
+    await audit.log_operation(
+        user["user_id"], audit.DOC_DELETE, "document", doc_id, 1,
+        {"deleted_chunks": deleted_chunks},
+    )
     return ok({"deleted_chunks": deleted_chunks})

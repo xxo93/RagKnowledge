@@ -9,6 +9,11 @@ export function listSessions() {
   return http.get('/chat/session/list')
 }
 
+// PATCH /api/chat/session/{id} —— 重命名本人会话（越权后端返回 40402）
+export function renameSession(sessionId, sessionName) {
+  return http.patch(`/chat/session/${sessionId}`, { session_name: sessionName })
+}
+
 export function deleteSession(sessionId) {
   return http.delete(`/chat/session/${sessionId}`)
 }

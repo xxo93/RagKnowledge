@@ -17,12 +17,13 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from errors import BizError, ok, ERR_SESSION_NOT_FOUND
 from schemas.chat import ChatStreamRequest
 from services import chat_store, memory, rag as rag_svc, stream_heartbeat
+from services.auth_deps import get_current_user
 from agent import graph
 from prompts import NO_RESULT_FALLBACK
 from config import settings
@@ -48,12 +49,12 @@ def _find_hits(final: dict) -> list[dict]:
 
 
 @router.post("/stream")
-async def chat_stream(body: ChatStreamRequest):
+async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_user)):
     """POST /api/chat/stream —— 流式问答（tool/source/token/done/error 事件）。"""
-    # 建立流之前：会话不存在直接 JSON 错误包络，不进入流式生成
-    session = await chat_store.get_session(body.session_id)
+    # 建立流之前：会话不存在或不属于当前用户直接 JSON 错误包络，不进入流式生成
+    session = await chat_store.get_session_for_user(body.session_id, user["user_id"])
     if session is None:
-        raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在，请先新建会话", http_status=404)
+        raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问，请先新建会话", http_status=404)
 
     async def _prepare():
         """流前置：历史加载 + 状态图执行（决策/检索/重排）；独立成任务以便前置静默期发心跳。"""
@@ -166,10 +167,10 @@ async def chat_stream(body: ChatStreamRequest):
 
 
 @router.get("/record/{session_id}")
-async def list_records(session_id: int):
-    """GET /api/chat/record/{session_id} —— 历史记录按时间正序回填（F-11）。"""
-    session = await chat_store.get_session(session_id)
+async def list_records(session_id: int, user: dict = Depends(get_current_user)):
+    """GET /api/chat/record/{session_id} —— 当前用户会话历史按时间正序回填。"""
+    session = await chat_store.get_session_for_user(session_id, user["user_id"])
     if session is None:
-        raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或已删除", http_status=404)
+        raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问", http_status=404)
     records = await chat_store.list_records(session_id)
     return ok({"total": len(records), "list": records})

@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     UPLOAD_MAX_MB: int = 10
     UPLOAD_DIR_NAME: str = "data/uploads"
 
+    # ---------- 认证 ----------
+    # 仅 scripts/migrate_auth_multitenant.py 首次创建初始 admin 时读取；为空则随机生成临时密码
+    SEED_ADMIN_PASSWORD: str = ""
+
     # ---------- 派生路径 / 列表 ----------
     @computed_field  # type: ignore[prop-decorator]
     @property

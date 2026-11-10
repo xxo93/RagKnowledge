@@ -1,6 +1,8 @@
 // SSE 流式客户端（架构 §7.3）：EventSource 不支持 POST body，故用 fetch + ReadableStream 手写解析。
 // 事件：tool（工具状态）/ token（答案增量）/ source（引用来源）/ done（结束）/ error（异常）
 // 中断：AbortController.abort()；捕获 AbortError 不弹错误，由 UI 复位输入框（§3.5 / §P-02）。
+// 鉴权：Cookie 同源自动携带；流建立前的 401/403 交给全局错误处理（回登录态 / 提示无权限）。
+import { notifyError } from './http'
 
 /**
  * 发起流式问答请求
@@ -29,10 +31,17 @@ export function streamChat(payload, handlers = {}) {
     if (!resp.ok || !resp.body) {
       // 建立流之前的 4xx/5xx 为 JSON 错误包络
       let msg = `请求失败（${resp.status}）`
+      let bizCode = null
       try {
         const body = await resp.json()
         msg = body.msg || msg
+        bizCode = body.code ?? null
       } catch (_) { /* 忽略解析失败 */ }
+      const err = new Error(msg)
+      err.httpStatus = resp.status
+      err.bizCode = bizCode
+      // 401 -> 全局清登录态并回登录页；403 -> 统一无权限提示
+      notifyError(err)
       handlers.onError?.({ code: 'HTTP_' + resp.status, msg })
       return
     }

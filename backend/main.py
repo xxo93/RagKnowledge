@@ -22,7 +22,7 @@ from config import settings
 from errors import register_exception_handlers, ok
 from app_logging import register_middlewares
 from db import init_pool, close_pool, is_ready
-from routers import system, docs, session, chat
+from routers import system, docs, session, chat, auth, admin
 
 logger = logging.getLogger("rag.main")
 
@@ -58,7 +58,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -70,6 +70,8 @@ app.include_router(system.router)
 app.include_router(docs.router)
 app.include_router(session.router)
 app.include_router(chat.router)
+app.include_router(auth.router)
+app.include_router(admin.router)
 
 
 @app.get("/health", tags=["meta"])
