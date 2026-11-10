@@ -1,11 +1,29 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { login } from '../api/auth'
+import { login, fetchDemoHint } from '../api/auth'
 
 const emit = defineEmits(['success'])
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
+const hint = ref(null) // { enabled, username, password }，默认关闭时后端返回 enabled=false
+
+onMounted(async () => {
+  try {
+    const data = await fetchDemoHint()
+    if (data && data.enabled && data.username) {
+      hint.value = data
+    }
+  } catch {
+    // 提示接口失败不影响登录表单
+  }
+})
+
+function fillDemo() {
+  if (!hint.value) return
+  form.value.username = hint.value.username
+  form.value.password = hint.value.password
+}
 
 async function onSubmit() {
   if (!form.value.username.trim() || !form.value.password) {
@@ -34,6 +52,23 @@ async function onSubmit() {
       <template #header>
         <div class="login-title">RagKnowledge 登录</div>
       </template>
+
+      <!-- 演示账号提示：仅当后端 DEMO_CREDENTIAL_HINT=true 且默认密码仍可登录时出现 -->
+      <el-alert
+        v-if="hint"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="demo-hint"
+        title="演示环境默认超级管理员"
+      >
+        <div class="demo-body">
+          <span class="demo-cred">{{ hint.username }} / {{ hint.password }}</span>
+          <el-button size="small" type="primary" plain @click="fillDemo">一键填入</el-button>
+        </div>
+        <div class="demo-tip">该提示由部署方显式开启；登录后请在右上角「修改密码」。</div>
+      </el-alert>
+
       <el-form label-position="top" @submit.prevent="onSubmit">
         <el-form-item label="用户名">
           <el-input
@@ -57,7 +92,7 @@ async function onSubmit() {
           登录
         </el-button>
       </el-form>
-      <p class="login-tip">登录后可管理本人会话；知识库维护操作仅限管理员。</p>
+      <p class="login-tip">登录后可管理本人会话；知识库维护与账号管理仅限管理员。</p>
     </el-card>
   </div>
 </template>
@@ -86,5 +121,27 @@ async function onSubmit() {
   color: #909399;
   font-size: 12px;
   text-align: center;
+}
+.demo-hint {
+  margin-bottom: 12px;
+}
+.demo-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+.demo-cred {
+  font-family: Consolas, Monaco, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b88230;
+  user-select: all;
+}
+.demo-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 </style>

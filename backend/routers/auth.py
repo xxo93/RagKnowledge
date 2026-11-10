@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
 from errors import BizError, ERR_PARAM, ERR_UNAUTHORIZED, ok
+from config import settings
 from services import account_store, audit, security
 from services.auth_deps import COOKIE_NAME, SESSION_SECONDS, get_current_user
 
@@ -99,6 +100,40 @@ async def logout(request: Request, response: Response):
 async def me(user: dict = Depends(get_current_user)):
     """GET /api/auth/me —— 返回当前登录用户信息。"""
     return ok(_public_user(user))
+
+
+@router.get("/demo-hint")
+async def demo_hint():
+    """GET /api/auth/demo-hint —— 登录页演示账号提示（默认关闭的显式开关）。
+
+    仅当 DEMO_CREDENTIAL_HINT=true **且** 配置的默认密码确实能登录时才返回明文；
+    否则一律返回 {"enabled": false}，不泄露任何账号信息。
+    """
+    disabled = {"enabled": False}
+    if not settings.DEMO_CREDENTIAL_HINT:
+        return ok(disabled)
+
+    username = (settings.DEFAULT_ADMIN_USERNAME or "admin").strip().lower()
+    password = (settings.DEFAULT_ADMIN_PASSWORD or "").strip()
+    if not password:
+        return ok(disabled)
+
+    try:
+        user = await account_store.get_user_by_username(username)
+        cred = await account_store.get_credentials_by_username(username)
+        if (
+            user is None
+            or user.get("status") != 1
+            or user.get("role") != "admin"
+            or cred is None
+            or not security.verify_password(password, cred.get("password_hash") or "")
+        ):
+            # 密码被改 / 账号被禁用 / 角色不符：不展示，避免给出过期凭据
+            return ok(disabled)
+    except Exception:  # noqa: BLE001 - 数据库不可用时登录页仍要能打开
+        return ok(disabled)
+
+    return ok({"enabled": True, "username": username, "password": password})
 
 
 @router.post("/password")

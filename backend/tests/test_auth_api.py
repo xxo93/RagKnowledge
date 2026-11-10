@@ -271,3 +271,70 @@ def test_member_cannot_manage_users(client: TestClient, monkeypatch) -> None:
         resp = getattr(client, method)(path)
         assert resp.status_code == 403, f"{method.upper()} {path} -> {resp.status_code}"
         assert resp.json()["code"] == 40303
+
+
+# ---------------- 演示账号提示（默认关闭） ----------------
+def test_demo_hint_disabled_when_switch_off(client: TestClient, monkeypatch) -> None:
+    """开关关闭时必须完全不泄露；不依赖部署环境 .env 的实际取值。"""
+    from config import settings
+
+    monkeypatch.setattr(settings, "DEMO_CREDENTIAL_HINT", False)
+    resp = client.get("/api/auth/demo-hint")
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {"enabled": False}
+
+
+def _patch_demo_credentials(monkeypatch, password_hash: str, role: str = "admin", status: int = 1):
+    from config import settings
+
+    async def fake_user(username):
+        return {"user_id": 1, "username": username, "display_name": "系统管理员",
+                "role": role, "status": status}
+
+    async def fake_cred(username):
+        return {"user_id": 1, "password_hash": password_hash}
+
+    monkeypatch.setattr(account_store, "get_user_by_username", fake_user)
+    monkeypatch.setattr(account_store, "get_credentials_by_username", fake_cred)
+    return settings
+
+
+def test_demo_hint_shown_when_enabled_and_credentials_valid(client: TestClient, monkeypatch) -> None:
+    from services import security
+
+    settings = _patch_demo_credentials(
+        monkeypatch, security.hash_password("Admin@12345")
+    )
+    monkeypatch.setattr(settings, "DEMO_CREDENTIAL_HINT", True)
+    monkeypatch.setattr(settings, "DEFAULT_ADMIN_PASSWORD", "Admin@12345")
+    monkeypatch.setattr(settings, "DEFAULT_ADMIN_USERNAME", "admin")
+
+    resp = client.get("/api/auth/demo-hint")
+    data = resp.json()["data"]
+    assert data == {"enabled": True, "username": "admin", "password": "Admin@12345"}
+
+
+def test_demo_hint_hidden_when_password_changed(client: TestClient, monkeypatch) -> None:
+    from services import security
+
+    settings = _patch_demo_credentials(
+        monkeypatch, security.hash_password("another-password")
+    )
+    monkeypatch.setattr(settings, "DEMO_CREDENTIAL_HINT", True)
+    monkeypatch.setattr(settings, "DEFAULT_ADMIN_PASSWORD", "Admin@12345")
+
+    resp = client.get("/api/auth/demo-hint")
+    assert resp.json()["data"] == {"enabled": False}
+
+
+def test_demo_hint_hidden_for_disabled_account(client: TestClient, monkeypatch) -> None:
+    from services import security
+
+    settings = _patch_demo_credentials(
+        monkeypatch, security.hash_password("Admin@12345"), status=0
+    )
+    monkeypatch.setattr(settings, "DEMO_CREDENTIAL_HINT", True)
+    monkeypatch.setattr(settings, "DEFAULT_ADMIN_PASSWORD", "Admin@12345")
+
+    resp = client.get("/api/auth/demo-hint")
+    assert resp.json()["data"] == {"enabled": False}

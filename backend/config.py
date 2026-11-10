@@ -90,9 +90,17 @@ class Settings(BaseSettings):
     UPLOAD_MAX_MB: int = 10
     UPLOAD_DIR_NAME: str = "data/uploads"
 
-    # ---------- 认证 ----------
-    # 仅 scripts/migrate_auth_multitenant.py 首次创建初始 admin 时读取；为空则随机生成临时密码
-    SEED_ADMIN_PASSWORD: str = ""
+    # ---------- 默认管理员（演示环境开箱即用）----------
+    # 由 scripts/migrate_auth_multitenant.py 首次建库与 scripts/ensure_admin.py 使用；
+    # 生产部署请用环境变量覆盖，并登录后立即改密（或把 DEFAULT_ADMIN_PASSWORD 置空改为随机生成）。
+    DEFAULT_ADMIN_USERNAME: str = "admin"
+    DEFAULT_ADMIN_PASSWORD: str = "Admin@12345"
+    DEFAULT_ADMIN_DISPLAY_NAME: str = "系统管理员"
+
+    # 是否在登录页显示演示账号提示（默认关闭）。
+    # 开启后 GET /api/auth/demo-hint 才会返回明文密码；仅在默认密码确实能登录时才展示，
+    # 改了密码或禁用账号后自动隐藏，避免给出过期的错误提示。切勿在生产环境开启。
+    DEMO_CREDENTIAL_HINT: bool = False
 
     # ---------- 派生路径 / 列表 ----------
     @computed_field  # type: ignore[prop-decorator]

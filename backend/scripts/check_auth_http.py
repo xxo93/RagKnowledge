@@ -27,6 +27,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 import httpx  # noqa: E402
 
+from config import settings  # noqa: E402
 from db import close_pool, init_pool  # noqa: E402
 from services import account_store, security  # noqa: E402
 
@@ -200,6 +201,17 @@ async def main() -> int:
                 check("匿名读文档列表被拒绝", r.status_code == 401, f"HTTP={r.status_code}")
                 r = await anon.get("/api/system/info")
                 check("匿名读系统信息被拒绝", r.status_code == 401, f"HTTP={r.status_code}")
+                r = await anon.get("/api/auth/demo-hint")
+                hint = r.json().get("data") or {}
+                # 开关关闭时必须完全不泄露；开启时只能返回配置的默认管理员凭据
+                if settings.DEMO_CREDENTIAL_HINT:
+                    check("演示账号提示按开关开启且仅返回配置凭据",
+                          hint.get("enabled") is True
+                          and hint.get("username") == settings.DEFAULT_ADMIN_USERNAME
+                          and hint.get("password") == settings.DEFAULT_ADMIN_PASSWORD,
+                          f"data={hint}")
+                else:
+                    check("演示账号提示关闭时不泄露", hint == {"enabled": False}, f"data={hint}")
 
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as adm:
                 r = await adm.post("/api/auth/login",

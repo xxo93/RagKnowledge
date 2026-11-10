@@ -44,48 +44,129 @@ RagKnowledge/
 
 分层依赖规则（架构 §2.2）：routers 只做协议；services 做流程；SQL 只出现在 `services/vector_store.py`、`services/chat_store.py`、`services/account_store.py`、`services/audit.py` 与 `db.py`；agent 不直接读写库；外部 LLM/Embedding 只经 `llm.py`/`embedder.py`。
 
-## 三、本地启动（完成 M0 环境后）
+## 三、启动与访问（含默认管理员）
 
-### 1. 数据库（任选其一）
+### 3.1 访问地址
 
-Docker（最省事，镜像已内置 pgvector）：
+| 用途 | 地址 |
+| --- | --- |
+| **前端页面（从这里进）** | <http://127.0.0.1:5173> |
+| 接口文档（Swagger） | <http://127.0.0.1:8000/docs> |
+| 健康检查 | <http://127.0.0.1:8000/health> |
 
-```powershell
-docker run -d --name pgvector -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rag_agent -p 5432:5432 pgvector/pgvector:pg16
+> 服务只绑定 `127.0.0.1`，仅本机可访问。
+
+### 3.2 默认管理员（超级账号，拥有全部权限）
+
+| 项 | 值 |
+| --- | --- |
+| 用户名 | `admin` |
+| 密码 | `Admin@12345` |
+| 角色 | `admin`（可管理文档/索引 + 管理账号 + 全部普通用户能力） |
+
+默认值在代码中配置，可被 `.env` 或环境变量覆盖（`backend/config.py`）：
+
+```ini
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=Admin@12345      # 置空则改为随机生成，迁移脚本只在控制台打印一次
+DEFAULT_ADMIN_DISPLAY_NAME=系统管理员
+DEMO_CREDENTIAL_HINT=false              # 是否在登录页显示上面这组演示账号（默认关闭）
 ```
 
-或本机 PostgreSQL 安装 pgvector 扩展后建库：`CREATE DATABASE rag_agent;`
+- 首次初始化由 `scripts/migrate_auth_multitenant.py` 按上述配置创建；
+- 已有环境想“找回/重置”这个超级账号，执行：
 
-### 2. 后端
+  ```powershell
+  cd backend
+  python scripts\ensure_admin.py                    # 缺则创建；已存在则不改密码
+  python scripts\ensure_admin.py --reset-password   # 强制重置为配置密码并吊销其登录态
+  ```
+
+- 登录后请到右上角「修改密码」改掉默认密码；生产部署请用环境变量覆盖默认值。
+
+**登录页演示提示（默认关闭）**：把 `DEMO_CREDENTIAL_HINT` 置为 `true` 后，登录页会显示
+“演示环境默认超级管理员：`admin` / `Admin@12345`”并提供「一键填入」。
+该提示只在默认密码确实还能登录时才出现——一旦你改了密码或禁用了账号，即使开关仍开着也会自动隐藏，不会给出过期凭据。**生产环境不要开启。**
+
+### 3.3 首次准备（已完成环境可跳过）
+
+**数据库（任选其一）**
+
+```powershell
+# Docker（最省事，镜像已内置 pgvector）
+docker run -d --name pgvector -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rag_agent -p 5432:5432 pgvector/pgvector:pg16
+# 或本机 PostgreSQL 安装 pgvector 扩展后：CREATE DATABASE rag_agent;
+```
+
+**后端**
 
 ```powershell
 cd backend
 python -m venv .venv ; .venv\Scripts\activate
 python -m pip install -r requirements.txt
-copy ..\.env.example ..\.env     # 填入 DB_DSN、LLM_API_KEY、EMBEDDING_DIM
-python scripts\create_database.py   # 幂等建 rag_agent 库（本机 PG；Docker 方式可跳过）
-python scripts\init_db.py           # 幂等建扩展/表/HNSW 索引并回读校验（vector(1024)）
-python scripts\migrate_auth_multitenant.py   # 建认证/审计表、会话归属，并创建初始 admin
-python scripts\run_dev.py            # Windows 推荐：SelectorEventLoop 起异步 DB 连接，监听 127.0.0.1:8000
-# 无库冷启动 / 非 Windows 可直接：uvicorn main:app --host 127.0.0.1 --port 8000
+copy ..\.env.example ..\.env         # 填入 DB_DSN、LLM_API_KEY、EMBEDDING_API_KEY、EMBEDDING_DIM
+python scripts\create_database.py    # 幂等建 rag_agent 库（本机 PG；Docker 方式可跳过）
+python scripts\init_db.py            # 幂等建扩展/表/HNSW 索引并回读校验（vector(1024)）
+python scripts\migrate_auth_multitenant.py   # 建认证/审计表、会话归属，并创建默认管理员
+python scripts\ensure_admin.py       # 可选：确认超级账号存在/打印当前配置
 ```
 
-> 初始管理员：迁移脚本首次执行时创建 `admin`。设置环境变量 `SEED_ADMIN_PASSWORD` 可指定密码，
-> 未设置则随机生成并在控制台打印一次（`SEED_ADMIN_TEMP_PASSWORD=...`），请立即登录并修改。
-> 所有业务接口都需要登录：未登录/登录态失效返回 `40101`，越权返回 `40303`。
+**前端**
+
+```powershell
+cd frontend
+npm install
+```
+
+### 3.4 日常启动（两个终端）
+
+```powershell
+# 终端 1：后端（Windows 必须用 run_dev.py，裸 uvicorn 会因 Proactor 事件循环连不上库）
+cd backend
+..\.venv\Scripts\python.exe scripts\run_dev.py      # http://127.0.0.1:8000
+
+# 终端 2：前端（Vite 代理 /api -> 8000）
+cd frontend
+npm run dev                                          # http://127.0.0.1:5173
+```
+
+启动后浏览器打开 <http://127.0.0.1:5173>，用 `admin / Admin@12345` 登录。
+
+**登录后能看到什么**
+
+- 智能对话：新建会话、流式问答、来源卡片；会话仅本人可见，可重命名/删除；
+- 知识库管理（管理员）：批量上传、文档列表、重解析、删除、重建 HNSW 索引；
+- 用户管理（管理员）：账号列表、新建账号、启用/禁用、重置密码；
+- 右上角：当前角色、修改密码、退出登录。
+
+**验证“多用户隔离”的推荐做法**：用管理员进「用户管理」新建一个 `member` 账号 → 用无痕窗口登录该 member → 对比两边的菜单与知识库列表；member 只能看到自己的会话，且看不到「知识库管理 / 用户管理」。
+
+### 3.5 停止与重启
+
+- 前台终端直接 `Ctrl+C`；
+- 若由 AI 会话以后台任务方式启动，可让它停掉，或按端口清理：
+
+  ```powershell
+  Get-NetTCPConnection -LocalPort 5173,8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+  ```
+
+### 3.6 接口一览（供调用方参考）
 
 接口文档：<http://127.0.0.1:8000/docs>；健康检查：`GET /health`；配置元信息：`GET /api/system/info`（管理员）。
 认证：`POST /api/auth/login`（HttpOnly Cookie）、`POST /api/auth/logout`、`GET /api/auth/me`、`POST /api/auth/password`。
 文档接口（管理员）：`POST /api/docs/upload`（单文件兼容）、`POST /api/docs/upload/batch`（服务端顺序批量聚合）、`POST /api/docs/{doc_id}/reparse`（重解析替换切片向量）、`POST /api/docs/reindex`（重建 HNSW 索引）、`GET /api/docs/list`、`DELETE /api/docs/{doc_id}`；前端文档页已接入批量上传、重解析与重建索引操作。
 用户管理（管理员）：`GET/POST /api/admin/users`、`PATCH /api/admin/users/{id}/status`、`POST /api/admin/users/{id}/reset-password`；管理员登录后可在顶部「用户管理」页完成列表、新建账号、启用/禁用与重置密码（禁用/重置会立即吊销该账号登录态）。
 
-### 3. 前端
+### 3.7 常见问题
 
-```powershell
-cd frontend
-npm install
-npm run dev        # http://127.0.0.1:5173 ，Vite 代理 /api 到 8000
-```
+| 现象 | 原因与处理 |
+| --- | --- |
+| 5173 打开报 `ECONNREFUSED` / 接口 500 | 后端没起；先确认 `http://127.0.0.1:8000/health` 返回 200 |
+| 后端报 `ProactorEventLoop` 相关错误 | 用了裸 `uvicorn`；改用 `python scripts\run_dev.py` |
+| 登录提示“用户名或密码错误” | 密码被改过；执行 `python scripts\ensure_admin.py --reset-password` |
+| 页面一直停在登录页 | Cookie 未生效：确认从 `5173` 访问（经 Vite 代理同源），不要直接用 `8000` 打开页面 |
+| 全部接口 401 | 登录态过期或被吊销（改密/重置/禁用都会吊销）；重新登录 |
+| 普通用户看不到管理菜单 | 预期行为；后端也会对越权请求返回 `40303` |
 
 ## 四、里程碑与当前进度
 

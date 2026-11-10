@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import secrets
 import sys
 from pathlib import Path
@@ -60,20 +59,25 @@ async def main() -> int:
 
         admin_id = await account_store.get_first_admin_id()
         if admin_id is None:
-            # 支持 .env（SEED_ADMIN_PASSWORD）与进程环境变量两种来源
-            password = (settings.SEED_ADMIN_PASSWORD or os.environ.get("SEED_ADMIN_PASSWORD", "")).strip()
+            # 账号/密码来自 config.py 的 DEFAULT_ADMIN_*（可用 .env 或环境变量覆盖）；
+            # 密码置空则随机生成一次性临时密码。
+            username = (settings.DEFAULT_ADMIN_USERNAME or "admin").strip().lower()
+            display = (settings.DEFAULT_ADMIN_DISPLAY_NAME or "系统管理员").strip()
+            password = (settings.DEFAULT_ADMIN_PASSWORD or "").strip()
             generated = False
             if not password:
                 password = secrets.token_urlsafe(12)
                 generated = True
             await account_store.create_user(
-                "admin", "系统管理员", security.hash_password(password), "admin"
+                username, display, security.hash_password(password), "admin"
             )
             admin_id = await account_store.get_first_admin_id()
-            print("SEED_ADMIN_CREATED=YES")
+            print("SEED_ADMIN_CREATED=YES username=%s" % username)
             if generated:
                 print("SEED_ADMIN_TEMP_PASSWORD=%s" % password)
-                print("提示：请立即保存该临时密码；后续可通过管理员接口或脚本重置。")
+                print("提示：请立即保存该临时密码；后续可通过 scripts/ensure_admin.py --reset-password 重置。")
+            else:
+                print("SEED_ADMIN_PASSWORD_SOURCE=DEFAULT_ADMIN_PASSWORD")
 
         async with pool.connection() as conn:
             async with conn.cursor() as cur:

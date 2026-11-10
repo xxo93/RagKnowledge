@@ -17,3 +17,8 @@ export function fetchMe() {
 export function changePassword(payload) {
   return http.post('/auth/password', payload)
 }
+
+// GET /api/auth/demo-hint —— 演示账号提示；后端开关关闭时返回 {enabled:false}
+export function fetchDemoHint() {
+  return http.get('/auth/demo-hint')
+}
