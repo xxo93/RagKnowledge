@@ -1,3 +1,7 @@
+""" LLM（deepseek） 接口余额查询
+api_key: DEEPSEEK_API_KEY
+api_url: https://api.deepseek.com/user/balance
+"""
 import os
 from pathlib import Path
 
@@ -5,7 +9,9 @@ import requests
 from dotenv import load_dotenv
 
 # 从项目根目录的 .env 加载环境变量（.env 已在 .gitignore 中排除，不入库）
-load_dotenv(Path(__file__).resolve().parent / ".env")
+# 项目根目录 = backend/tests/../../
+ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ROOT_ENV)
 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 
