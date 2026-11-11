@@ -326,24 +326,45 @@ async def count_enabled_admins(include_user_id: Optional[int] = None) -> int:
             return int(row[0])
 
 
-async def list_users(page: int = 1, size: int = 20) -> tuple[int, list[dict]]:
-    """管理员用户列表：不含密码哈希；按 user_id 升序。"""
+async def list_users(
+    page: int = 1,
+    size: int = 20,
+    keyword: Optional[str] = None,
+    role: Optional[str] = None,
+    status: Optional[int] = None,
+) -> tuple[int, list[dict]]:
+    """管理员用户列表：不含密码哈希；按 user_id 升序；筛选条件全部参数化。"""
     page = max(1, int(page or 1))
     size = max(1, min(int(size or 20), 100))
     offset = (page - 1) * size
+    where: list[str] = []
+    params: dict = {"lim": size, "off": offset}
+
+    if keyword and keyword.strip():
+        where.append("(username ILIKE %(keyword)s OR display_name ILIKE %(keyword)s)")
+        params["keyword"] = f"%{keyword.strip()}%"
+    if role in ("admin", "member"):
+        where.append("role = %(role)s")
+        params["role"] = role
+    if status is not None:
+        where.append("status = %(status)s")
+        params["status"] = int(status)
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     pool = get_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT count(*) FROM app_user")
+            await cur.execute(f"SELECT count(*) FROM app_user {where_sql}", params)
             total = int((await cur.fetchone())[0])
             await cur.execute(
-                """
+                f"""
                 SELECT user_id, username, display_name, role, status, created_at, last_login_at
                 FROM app_user
+                {where_sql}
                 ORDER BY user_id ASC
                 LIMIT %(lim)s OFFSET %(off)s
                 """,
-                {"lim": size, "off": offset},
+                params,
             )
             cols = [c.name for c in cur.description]
             items = [dict(zip(cols, row)) for row in await cur.fetchall()]

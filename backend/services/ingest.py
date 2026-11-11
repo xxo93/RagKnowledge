@@ -86,8 +86,9 @@ async def process(original_name: str, file_bytes: bytes) -> dict:
         # 2) 解析 -> 清洗 -> 切片 -> 向量化（同步阻塞段放线程池；不占 DB 连接）
         rows, chunk_count = await run_in_threadpool(_build_rows, abs_path)
 
-        # T2：原子写入切片并置成功
-        await vs.commit_ingest(doc_id, rows, chunk_count)
+        # T2：原子写入切片并置成功；文档摘要由切片文本确定性归并
+        summary = vs.summarize_chunks(rows)
+        await vs.commit_ingest(doc_id, rows, chunk_count, summary=summary)
         logger.info("入库成功 doc_id=%d chunks=%d", doc_id, chunk_count)
         return {"doc_id": doc_id, "chunk_count": chunk_count, "status": 1}
 

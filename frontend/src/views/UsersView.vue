@@ -1,7 +1,7 @@
 <script setup>
 // 管理员用户管理页：列表、创建、启禁用与重置密码
 // 前端按角色隐藏入口；最终权限仍由后端强制校验
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listUsers,
@@ -20,6 +20,18 @@ const page = ref(1)
 const size = 20
 const loading = ref(false)
 const busyId = ref(null)
+const keyword = ref('')
+const roleFilter = ref('all')
+const statusFilter = ref('all')
+const loadError = ref(false)
+
+function currentFilters() {
+  return {
+    keyword: keyword.value.trim(),
+    role: roleFilter.value,
+    status: statusFilter.value
+  }
+}
 
 const createVisible = ref(false)
 const creating = ref(false)
@@ -36,16 +48,20 @@ function fmtTime(value) {
 async function refresh(p = page.value) {
   loading.value = true
   try {
-    const data = await listUsers(p, size)
+    const data = await listUsers(p, size, currentFilters())
     rows.value = data?.list || []
     total.value = data?.total || 0
     page.value = p
+    loadError.value = false
   } catch (e) {
+    loadError.value = true
     ElMessage.error(e.message || '用户列表加载失败')
   } finally {
     loading.value = false
   }
 }
+
+watch([keyword, roleFilter, statusFilter], () => refresh(1))
 
 function openCreate() {
   form.value = { username: '', display_name: '', password: '', role: 'member' }
@@ -171,6 +187,38 @@ onMounted(() => refresh(1))
       class="tip"
     />
 
+    <div class="toolbar">
+      <el-input
+        v-model="keyword"
+        size="small"
+        clearable
+        placeholder="用户名 / 显示名"
+        aria-label="按用户名或显示名筛选"
+        class="filter-input"
+      />
+      <el-select v-model="roleFilter" size="small" aria-label="按角色筛选" class="filter-select">
+        <el-option label="全部角色" value="all" />
+        <el-option label="管理员" value="admin" />
+        <el-option label="普通用户" value="member" />
+      </el-select>
+      <el-select v-model="statusFilter" size="small" aria-label="按状态筛选" class="filter-select">
+        <el-option label="全部状态" value="all" />
+        <el-option label="启用" value="1" />
+        <el-option label="禁用" value="0" />
+      </el-select>
+    </div>
+
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      title="用户列表加载失败，可点击重试"
+      class="load-error"
+    >
+      <el-button size="small" @click="refresh(1)">重新加载</el-button>
+    </el-alert>
+
     <el-table :data="rows" v-loading="loading" size="small" class="table">
       <el-table-column prop="user_id" label="ID" width="70" />
       <el-table-column label="用户名" min-width="150">
@@ -276,7 +324,11 @@ onMounted(() => refresh(1))
 .page-head { display: flex; justify-content: space-between; align-items: center; }
 .head-ops { display: flex; align-items: center; gap: 10px; }
 .tip { margin-bottom: 12px; }
-.table { width: 100%; }
+.toolbar { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.filter-input { width: 220px; }
+.filter-select { width: 130px; }
+.load-error { margin-bottom: 12px; }
+.table { width: 100%; overflow-x: auto; }
 .self-tag { margin-left: 8px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 12px; }
 </style>

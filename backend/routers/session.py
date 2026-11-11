@@ -5,7 +5,9 @@ SQL 全部位于 services/chat_store；本层只做编排与统一包络。
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 
 from errors import ok
 from schemas.chat import SessionCreate, SessionRename
@@ -23,10 +25,18 @@ async def create_session(body: SessionCreate, user: dict = Depends(get_current_u
 
 
 @router.get("/list")
-async def list_sessions(user: dict = Depends(get_current_user)):
-    """GET /api/chat/session/list —— 只返回当前用户会话及记录数。"""
-    items = await chat_store.list_sessions(user["user_id"])
-    return ok({"total": len(items), "list": items})
+async def list_sessions(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, max_length=128),
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/chat/session/list?page=&size=&keyword= —— 只返回当前用户会话及记录数。"""
+    offset = (page - 1) * size
+    total, items = await chat_store.list_sessions(
+        user["user_id"], limit=size, offset=offset, keyword=keyword
+    )
+    return ok({"total": total, "list": items, "page": page, "size": size, "keyword": keyword})
 
 
 @router.patch("/{session_id}")

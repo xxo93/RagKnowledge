@@ -44,6 +44,10 @@ async def system_info(_: dict = Depends(require_admin)):
         "index_type": "hnsw_cosine_ops",
         "max_tool_rounds": settings.MAX_TOOL_ROUNDS,
         "history_rounds": settings.HISTORY_ROUNDS,
+        # 上传限制对外暴露，前端据此决定走单请求还是分块上传，避免写死上限
+        "upload_max_mb": settings.UPLOAD_MAX_MB,
+        "upload_total_max_mb": settings.UPLOAD_TOTAL_MAX_MB,
+        "upload_chunk_max_mb": settings.UPLOAD_CHUNK_MAX_MB,
         "db_ready": is_ready(),
         "pgvector_version": pg_version,
         "doc_total": doc_total,

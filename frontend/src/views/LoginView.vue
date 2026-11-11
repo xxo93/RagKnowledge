@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { login, fetchDemoHint } from '../api/auth'
+import { AGENT_NAME } from '../config/brand.js'
 
 const emit = defineEmits(['success'])
 const form = ref({ username: '', password: '' })
@@ -50,7 +51,7 @@ async function onSubmit() {
   <div class="login-page">
     <el-card class="login-card" shadow="always">
       <template #header>
-        <div class="login-title">RagKnowledge 登录</div>
+        <div class="login-title">{{ AGENT_NAME }} 登录</div>
       </template>
 
       <!-- 演示账号提示：仅当后端 DEMO_CREDENTIAL_HINT=true 且默认密码仍可登录时出现 -->
@@ -103,7 +104,7 @@ async function onSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f7fa;
+  background: var(--bg);
 }
 .login-card {
   width: 380px;
@@ -118,7 +119,7 @@ async function onSubmit() {
 }
 .login-tip {
   margin: 12px 0 0;
-  color: #909399;
+  color: var(--text-secondary);
   font-size: 12px;
   text-align: center;
 }
@@ -136,12 +137,12 @@ async function onSubmit() {
   font-family: Consolas, Monaco, monospace;
   font-size: 13px;
   font-weight: 600;
-  color: #b88230;
+  color: var(--warning);
   user-select: all;
 }
 .demo-tip {
   margin-top: 6px;
   font-size: 12px;
-  color: #909399;
+  color: var(--text-secondary);
 }
 </style>

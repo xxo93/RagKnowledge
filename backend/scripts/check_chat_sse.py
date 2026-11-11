@@ -66,7 +66,7 @@ async def main() -> int:
             )
             await chat_store.insert_record(tmp_sid, "问题B", "答案B")
 
-            recs = await chat_store.list_records(tmp_sid)
+            _, recs = await chat_store.list_records(tmp_sid)
             check("A1 插入2条且历史正序回填",
                   len(recs) == 2 and recs[0]["query"] == "问题A" and recs[1]["query"] == "问题B",
                   f"n={len(recs)}")
@@ -86,13 +86,13 @@ async def main() -> int:
             check("A4 memory.load_recent 角色成对且时间正序",
                   roles == ["user", "assistant", "user", "assistant"], f"roles={roles}")
 
-            sessions = await chat_store.list_sessions(admin_id)
+            _, sessions = await chat_store.list_sessions(admin_id)
             check("A5 会话列表包含临时会话", any(s["session_id"] == tmp_sid for s in sessions))
 
             await chat_store.delete_session(tmp_sid, admin_id)
             check("A6 删除会话后归属校验返回 None",
                   await chat_store.get_session_for_user(tmp_sid, admin_id) is None)
-            check("A7 删除会话后记录级联清空", await chat_store.list_records(tmp_sid) == [])
+            check("A7 删除会话后记录级联清空", (await chat_store.list_records(tmp_sid))[1] == [])
         finally:
             # 兜底清理：断言失败也尽力删除临时会话
             if tmp_sid is not None and admin_id is not None:

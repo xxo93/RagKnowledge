@@ -41,6 +41,10 @@ class ToolEvent(BaseModel):
     label: str
     status: str                 # running / done
     round: int
+    result_count: int | None = None
+    ok: bool | None = None
+    error: str | None = None
+    detail: dict[str, object] | None = None
 
 
 class TokenEvent(BaseModel):
@@ -49,9 +53,15 @@ class TokenEvent(BaseModel):
 
 class SourceItem(BaseModel):
     doc_name: str
+    doc_title: str | None = None
+    chunk_id: int | None = None
+    doc_id: int | None = None
     chunk_index: int
     score: float
     snippet: str
+    summary: str | None = None
+    excerpt: str | None = None
+    rerank_score: float | None = None
 
 
 class SourceEvent(BaseModel):
@@ -62,6 +72,8 @@ class DoneEvent(BaseModel):
     record_id: int | None
     session_id: int
     elapsed_ms: int
+    session_title: str | None = None
+    source_count: int | None = None
 
 
 class ErrorEvent(BaseModel):

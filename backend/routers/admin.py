@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -55,10 +55,19 @@ def _public(item: dict) -> dict:
 async def list_users(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    keyword: str = Query("", description="按用户名或显示名模糊筛选"),
+    role: Optional[Literal["admin", "member"]] = Query(None),
+    status: Optional[int] = Query(None, ge=0, le=1),
     _: dict = Depends(require_admin),
 ):
-    """GET /api/admin/users —— 用户列表（不含密码哈希）。"""
-    total, items = await account_store.list_users(page, size)
+    """GET /api/admin/users —— 用户列表（不含密码哈希），支持可选服务端筛选。"""
+    total, items = await account_store.list_users(
+        page,
+        size,
+        keyword=keyword or None,
+        role=role,
+        status=status,
+    )
     return ok({"total": total, "page": page, "size": size, "list": [_public(i) for i in items]})
 
 

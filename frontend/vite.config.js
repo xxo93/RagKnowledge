@@ -5,6 +5,17 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vue-vendor': ['vue'],
+          'ui-vendor': ['element-plus', 'axios'],
+          'markdown-vendor': ['marked', 'dompurify', 'highlight.js']
+        }
+      }
+    }
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

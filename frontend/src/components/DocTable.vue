@@ -13,6 +13,7 @@ const tagType = (row) => (row.status === 1 ? 'success' : row.status === 2 ? 'dan
 </script>
 
 <template>
+  <div class="table-scroll">
   <el-table :data="rows" v-loading="loading" empty-text="暂无文档，上传后在此展示" border>
     <el-table-column prop="doc_name" label="文档名称" min-width="220" />
     <el-table-column label="状态" width="110">
@@ -39,4 +40,11 @@ const tagType = (row) => (row.status === 1 ? 'success' : row.status === 2 ? 'dan
       </template>
     </el-table-column>
   </el-table>
+  </div>
 </template>
+
+<style scoped>
+.table-scroll {
+  overflow-x: auto;
+}
+</style>

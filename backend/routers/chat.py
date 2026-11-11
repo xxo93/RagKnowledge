@@ -14,14 +14,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from errors import BizError, ok, ERR_SESSION_NOT_FOUND
 from schemas.chat import ChatStreamRequest
-from services import chat_store, memory, rag as rag_svc, stream_heartbeat
+from services import chat_store, memory, rag as rag_svc, stream_heartbeat, session_title as session_title_svc
+from services import vector_store as vs
 from services.auth_deps import get_current_user
 from agent import graph
 from prompts import NO_RESULT_FALLBACK
@@ -47,6 +50,31 @@ def _find_hits(final: dict) -> list[dict]:
     return []
 
 
+def _display_doc_name(name: str) -> str:
+    """从文件名派生展示标题；仅去后缀与分隔符，不读取文档正文。"""
+    cleaned = re.sub(r"\.[A-Za-z0-9]+$", "", (name or "").strip())
+    cleaned = re.sub(r"[_\-]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+@router.get("/suggestions")
+async def list_suggestions(user: dict = Depends(get_current_user)):
+    """GET /api/chat/suggestions —— 登录用户只读示例问题；基于成功入库文档标题轻量派生，不调用 LLM。"""
+    _, docs = await vs.list_documents(1, 6, status=1)
+    doc_questions: list[str] = []
+    for doc in docs:
+        title = _display_doc_name(doc.get("doc_name") or "")
+        if title:
+            doc_questions.append(f"「{title}」里有哪些关键内容？")
+    fixed_questions = [
+        "1234 × 56 等于多少？",
+        "知识库现在一共有多少份文档？",
+    ]
+    questions = list(dict.fromkeys(doc_questions[:2] + fixed_questions))
+    return ok({"questions": questions[:4]})
+
+
 @router.post("/stream")
 async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_user)):
     """POST /api/chat/stream —— 流式问答（tool/source/token/done/error 事件）。"""
@@ -55,13 +83,25 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
     if session is None:
         raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问，请先新建会话", http_status=404)
 
+    tool_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _sink(event: dict) -> None:
+        await tool_queue.put(event)
+
     async def _prepare():
         """前置阶段：加载历史并执行 Agent 决策、检索与重排；独立任务便于静默期发送心跳。"""
         history = await memory.load_recent(body.session_id)
-        final = await graph.run_once(body.query, history)
+        final = await graph.run_once(body.query, history, on_event=_sink)
         decision = (final.get("decision") or {}).get("tool")
         sources = final.get("sources") or []
         return history, final, sources, decision
+
+    async def _drain_tool_events():
+        """投递前置阶段已产生的工具 running/done 帧；队列清空后立即返回。"""
+        while not tool_queue.empty():
+            event = tool_queue.get_nowait()
+            payload = {k: v for k, v in event.items() if k != "type"}
+            yield _frame(event.get("type", "tool"), payload)
 
     async def event_gen():
         started = time.monotonic()
@@ -76,17 +116,12 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                 try:
                     await asyncio.wait_for(asyncio.shield(prep), timeout=settings.SSE_HEARTBEAT_SEC)
                 except asyncio.TimeoutError:
+                    async for frame in _drain_tool_events():
+                        yield frame
                     yield ": ping\n\n"
             history, final, sources, decision = prep.result()
-
-            # 1) 工具状态事件
-            for tc in final.get("tool_calls") or []:
-                yield _frame("tool", {
-                    "name": tc.get("name"),
-                    "label": tc.get("label"),
-                    "status": tc.get("status"),
-                    "round": tc.get("round"),
-                })
+            async for frame in _drain_tool_events():
+                yield frame
 
             # 来源事件先于答案文本发送，前端可先渲染来源卡片
             if sources:
@@ -136,12 +171,30 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                 logger.warning("对话记录落库失败（不影响本次流式结果）", exc_info=True)
                 record_id = None
             saved = record_id is not None
+            auto_title: str | None = None
+            source_count = len(sources)
+
+            # 仅首条记录成功落库时提炼标题；用户已改名、中断、落库失败均不覆盖
+            if saved:
+                try:
+                    record_count = await chat_store.count_records(body.session_id)
+                    if record_count == 1:
+                        title = session_title_svc.derive_title(body.query)
+                        if title:
+                            auto_title = await chat_store.maybe_set_auto_title(
+                                body.session_id, user["user_id"], title
+                            )
+                except Exception:  # noqa: BLE001 - 标题失败静默降级，不影响回答与落库
+                    logger.warning("会话自动标题生成失败（不影响本次回答）", exc_info=True)
+                    auto_title = None
 
             elapsed_ms = int((time.monotonic() - started) * 1000)
             yield _frame("done", {
                 "record_id": record_id,
                 "saved": saved,
                 "session_id": body.session_id,
+                "session_title": auto_title,
+                "source_count": source_count,
                 "elapsed_ms": elapsed_ms,
             })
         except asyncio.CancelledError:
@@ -164,10 +217,15 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
 
 
 @router.get("/record/{session_id}")
-async def list_records(session_id: int, user: dict = Depends(get_current_user)):
-    """GET /api/chat/record/{session_id} —— 当前用户会话历史按时间正序回填。"""
+async def list_records(
+    session_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: Optional[int] = Query(None, ge=0),
+    user: dict = Depends(get_current_user),
+):
+    """GET /api/chat/record/{session_id}?limit=&offset= —— 最近历史按时间正序回填。"""
     session = await chat_store.get_session_for_user(session_id, user["user_id"])
     if session is None:
         raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问", http_status=404)
-    records = await chat_store.list_records(session_id)
-    return ok({"total": len(records), "list": records})
+    total, records = await chat_store.list_records(session_id, limit=limit, offset=offset)
+    return ok({"total": total, "list": records, "limit": limit, "offset": offset})

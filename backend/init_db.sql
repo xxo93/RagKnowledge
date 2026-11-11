@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS document (
   chunk_count  INT          NOT NULL DEFAULT 0,
   status       SMALLINT     NOT NULL DEFAULT 0,   -- 0 处理中 1 成功 2 失败
   error_msg    VARCHAR(512) DEFAULT NULL,
+  summary      TEXT         DEFAULT NULL,
   create_time  TIMESTAMP    NOT NULL DEFAULT now()
 );
+ALTER TABLE document ADD COLUMN IF NOT EXISTS summary TEXT;
 COMMENT ON TABLE document IS '文档元信息';
 
 -- ---------- 切片向量表 document_chunk（核心）----------

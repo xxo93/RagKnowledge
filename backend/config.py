@@ -13,6 +13,10 @@ from functools import lru_cache
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+"""
+Pydantic Settings 的取值优先级: 
+代码初始化参数 > 系统环境变量 >  .env 文件 > 类字段默认值
+"""
 
 # backend/ 目录 = 本文件所在目录；项目根 = 其上一级
 BACKEND_DIR: Path = Path(__file__).resolve().parent
@@ -68,6 +72,8 @@ class Settings(BaseSettings):
     RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
     RERANK_TOP_N: int = 5        # 重排后保留条数；<=0 表示保留全部候选
     RERANK_TIMEOUT: int = 10
+    # 来源卡片持久化的相似片段长度；历史短摘要 + 后续按需拉取完整片段
+    SOURCE_EXCERPT_CHARS: int = 800
     HNSW_EF_SEARCH: int = 40
     # pgvector 0.8+ 取值：off / relaxed_order / strict_order；0.7.x 无此项，代码需容错
     HNSW_ITERATIVE_SCAN: str = "relaxed_order"
@@ -80,6 +86,9 @@ class Settings(BaseSettings):
     MULTI_ROUND_ENABLED: bool = True
     # 是否由 LLM 做再决策；True 会增加 LLM 调用，默认 False
     LLM_REPLAN_ENABLED: bool = False
+    # 首问标题是否调用 LLM 提炼；False 时走规则提炼，稳定性优先
+    SESSION_TITLE_LLM_ENABLED: bool = False
+    SESSION_TITLE_MAX_LEN: int = 16
 
     # ---------- SSE 心跳 ----------
     # 流前置阶段（决策 LLM / 向量化 / Rerank）静默期发送 SSE 注释帧 ": ping" 的间隔（秒）；
@@ -87,8 +96,17 @@ class Settings(BaseSettings):
     SSE_HEARTBEAT_SEC: float = 10.0
 
     # ---------- 文件上传 ----------
+    # 单次请求整体上传的硬上限（/docs/upload、/docs/upload/batch 走这条路径）
     UPLOAD_MAX_MB: int = 10
     UPLOAD_DIR_NAME: str = "data/uploads"
+    # 分块上传（/docs/upload/chunk + /docs/upload/complete）相关限制
+    # 单文件总大小上限：分块上传让大文件不必一次读进内存，因此这里放宽
+    UPLOAD_TOTAL_MAX_MB: int = 100
+    # 单个分块大小上限：前端可自选分块大小，但不能超过该值
+    UPLOAD_CHUNK_MAX_MB: int = 32
+    # 分片落盘目录（相对项目根）与过期清理时长；未完成的上传超过该时长会被清理
+    UPLOAD_CHUNK_DIR_NAME: str = "data/uploads/.chunks"
+    UPLOAD_CHUNK_STALE_HOURS: int = 24
 
     # ---------- 默认管理员（演示环境开箱即用）----------
     # 由 scripts/migrate_auth_multitenant.py 首次建库与 scripts/ensure_admin.py 使用；
@@ -117,6 +135,23 @@ class Settings(BaseSettings):
     @property
     def upload_max_bytes(self) -> int:
         return self.UPLOAD_MAX_MB * 1024 * 1024
+
+    @property
+    def upload_total_max_bytes(self) -> int:
+        """分块上传时单文件合并后的总大小上限。"""
+        return self.UPLOAD_TOTAL_MAX_MB * 1024 * 1024
+
+    @property
+    def upload_chunk_max_bytes(self) -> int:
+        """单个分片的大小上限。"""
+        return self.UPLOAD_CHUNK_MAX_MB * 1024 * 1024
+
+    @property
+    def chunk_dir(self) -> Path:
+        """分片临时目录；不存在时自动创建。"""
+        p = ROOT_DIR / self.UPLOAD_CHUNK_DIR_NAME
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     def safety_check(self) -> list[str]:
         """启动时执行软性配置检查，返回警告列表；不阻断应用启动。"""

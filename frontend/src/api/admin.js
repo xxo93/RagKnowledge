@@ -1,9 +1,13 @@
 // 管理员用户管理接口：列表、创建、启禁用、重置密码
 import http from './http'
 
-// GET /api/admin/users?page=&size= —— 用户列表（不含密码哈希）
-export function listUsers(page = 1, size = 20) {
-  return http.get('/admin/users', { params: { page, size } })
+// GET /api/admin/users?page=&size=&keyword=&role=&status= —— 用户列表（不含密码哈希）
+export function listUsers(page = 1, size = 20, filters = {}) {
+  const params = { page, size }
+  if (filters.keyword) params.keyword = filters.keyword
+  if (filters.role && filters.role !== 'all') params.role = filters.role
+  if (filters.status && filters.status !== 'all') params.status = filters.status
+  return http.get('/admin/users', { params })
 }
 
 // POST /api/admin/users —— 创建 member/admin 账号

@@ -19,13 +19,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from agent.state import AgentState, initial_state
 from agent import decision as decision_mod, dedup, replan
 from agent.tools import search_tool, calc_tool, doc_stats_tool
 from config import settings
-from prompts import NO_RESULT_FALLBACK, TOOL_LABELS
+from prompts import NO_RESULT_FALLBACK, RUNNING_LABELS, DONE_LABELS
 
 logger = logging.getLogger("rag.graph")
 
@@ -36,6 +36,29 @@ _STAT_LABEL = {
     "failed_docs": "失败文档数",
     "total_chunks": "切片总数",
 }
+
+EventSink = Optional[Callable[[dict], Awaitable[None]]]
+
+
+async def _emit(state: AgentState, event: dict) -> None:
+    """把工具生命周期事件投递到可选回调；无回调时保持纯状态图行为不变。"""
+    sink = state.get("event_sink")
+    if sink is not None:
+        await sink(event)
+
+
+def _done_label(tool_name: str, result_count: Optional[int], detail: Optional[dict] = None) -> str:
+    base = DONE_LABELS.get(tool_name, tool_name)
+    detail = detail or {}
+    if tool_name == "knowledge_search" and result_count is not None:
+        return f"{base} · 命中 {result_count} 条来源"
+    if tool_name == "calculator" and detail.get("result") is not None:
+        expression = detail.get("expression") or "算式"
+        return f"{base}：{expression} = {detail.get('result')}"
+    if tool_name == "doc_stats" and detail.get("value") is not None:
+        label = _STAT_LABEL.get(detail.get("stat_type"), detail.get("stat_type") or "统计")
+        return f"{base}：{label} {detail.get('value')}"
+    return base
 
 
 # ---------------- 节点 ----------------
@@ -56,21 +79,34 @@ async def knowledge_search_node(state: AgentState) -> dict:
         logger.info("跳过重复工具调用：%s", key)
         return {"used_keys": old_keys}
 
-    result = await search_tool.run(query)
-
     round_no = state.get("round", 0)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "running",
+        "label": RUNNING_LABELS[tool_name], "round": round_no,
+    })
+
+    result = await search_tool.run(query)
+    result_count = len(result.get("sources") or [])
+    done_label = _done_label(tool_name, result_count)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "done", "round": round_no,
+        "label": done_label, "result_count": result_count, "ok": bool(result.get("ok")),
+        "error": result.get("error"),
+    })
+
     observation = {
         "round": round_no,
-        "tool": "knowledge_search",
+        "tool": tool_name,
         "ok": bool(result.get("ok")),
         "result": result,
         "error": result.get("error"),
     }
     tool_call = {
-        "name": "knowledge_search",
-        "label": TOOL_LABELS["knowledge_search"],
+        "name": tool_name,
+        "label": done_label,
         "status": "done",
         "round": round_no,
+        "result_count": result_count,
     }
 
     sources = list(state.get("sources") or [])
@@ -100,21 +136,36 @@ async def calculator_node(state: AgentState) -> dict:
         logger.info("跳过重复工具调用：%s", key)
         return {"used_keys": old_keys}
 
-    result = await asyncio.to_thread(calc_tool.calculate, expression)
-
     round_no = state.get("round", 0)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "running",
+        "label": RUNNING_LABELS[tool_name], "round": round_no,
+    })
+
+    result = await asyncio.to_thread(calc_tool.calculate, expression)
+    detail = {"expression": result.get("expression"), "result": result.get("result")}
+    done_label = _done_label(tool_name, 1 if result.get("ok") else None, detail)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "done", "round": round_no,
+        "label": done_label, "result_count": 1 if result.get("ok") else None,
+        "ok": bool(result.get("ok")), "error": result.get("error"),
+        "detail": detail,
+    })
+
     observation = {
         "round": round_no,
-        "tool": "calculator",
+        "tool": tool_name,
         "ok": bool(result.get("ok")),
-        "result": {"expression": result.get("expression"), "result": result.get("result")},
+        "result": detail,
         "error": result.get("error"),
     }
     tool_call = {
-        "name": "calculator",
-        "label": TOOL_LABELS["calculator"],
+        "name": tool_name,
+        "label": done_label,
         "status": "done",
         "round": round_no,
+        "result_count": 1 if result.get("ok") else None,
+        "detail": detail,
     }
     return {
         "observations": (state.get("observations") or []) + [observation],
@@ -134,21 +185,38 @@ async def doc_stats_node(state: AgentState) -> dict:
         logger.info("跳过重复工具调用：%s", key)
         return {"used_keys": old_keys}
 
-    result = await doc_stats_tool.run(stat_type)
-
     round_no = state.get("round", 0)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "running",
+        "label": RUNNING_LABELS[tool_name], "round": round_no,
+    })
+
+    result = await doc_stats_tool.run(stat_type)
+    value = result.get("value")
+    result_count = int(value) if isinstance(value, (int, float)) else None
+    detail = {"stat_type": result.get("stat_type"), "value": value}
+    done_label = _done_label(tool_name, result_count, detail)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "done", "round": round_no,
+        "label": done_label, "result_count": result_count,
+        "ok": bool(result.get("ok")), "error": result.get("error"),
+        "detail": detail,
+    })
+
     observation = {
         "round": round_no,
-        "tool": "doc_stats",
+        "tool": tool_name,
         "ok": bool(result.get("ok")),
-        "result": {"stat_type": result.get("stat_type"), "value": result.get("value")},
+        "result": detail,
         "error": result.get("error"),
     }
     tool_call = {
-        "name": "doc_stats",
-        "label": TOOL_LABELS["doc_stats"],
+        "name": tool_name,
+        "label": done_label,
         "status": "done",
         "round": round_no,
+        "result_count": result_count,
+        "detail": detail,
     }
     return {
         "observations": (state.get("observations") or []) + [observation],
@@ -286,10 +354,14 @@ def get_graph():
 
 
 # ---------------- 运行入口 ----------------
-async def run_once(query: str, history: list[dict] | None = None) -> dict:
-    """非流式执行完整状态图，返回最终状态字典。"""
+async def run_once(
+    query: str,
+    history: list[dict] | None = None,
+    on_event: EventSink = None,
+) -> dict:
+    """非流式执行完整状态图，返回最终状态字典；on_event 可选接收工具生命周期事件。"""
     graph = get_graph()
-    return await graph.ainvoke(initial_state(query, history))
+    return await graph.ainvoke(initial_state(query, history, event_sink=on_event))
 
 
 async def run_stream(

@@ -60,8 +60,8 @@ async def main() -> int:
         await chat_store.insert_record(admin_sid, "admin-question", "admin-answer")
 
         # ---------------- 列表隔离 ----------------
-        admin_list = await chat_store.list_sessions(admin_id)
-        member_list = await chat_store.list_sessions(member_id)
+        _, admin_list = await chat_store.list_sessions(admin_id)
+        _, member_list = await chat_store.list_sessions(member_id)
 
         check("admin 列表包含 admin 会话",
               any(s["session_id"] == admin_sid for s in admin_list))
@@ -79,9 +79,10 @@ async def main() -> int:
         except BizError as exc:
             rejected = exc.http_status == 404
         check("member 删除 admin 会话被拒绝", rejected)
+        admin_records = await chat_store.list_records(admin_sid)
         check("越权删除未销毁 admin 聊天记录",
-              len(await chat_store.list_records(admin_sid)) == 1,
-              f"records={len(await chat_store.list_records(admin_sid))}")
+              len(admin_records[1]) == 1,
+              f"records={len(admin_records[1])}")
         check("越权删除后 admin 会话仍存在",
               await chat_store.get_session_for_user(admin_sid, admin_id) is not None)
 

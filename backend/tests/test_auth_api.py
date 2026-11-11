@@ -26,6 +26,7 @@ PROTECTED_ROUTES = [
     ("patch", "/api/chat/session/1"),
     ("delete", "/api/chat/session/1"),
     ("post", "/api/chat/stream"),
+    ("get", "/api/chat/suggestions"),
     ("get", "/api/chat/record/1"),
     ("post", "/api/docs/reindex"),
     ("get", "/api/docs/list"),
@@ -118,7 +119,7 @@ def test_admin_can_read_admin_only_get_endpoints(client: TestClient, monkeypatch
 
     from services import vector_store
 
-    async def fake_list_documents(page, size):
+    async def fake_list_documents(page, size, keyword=None, status=None):
         return 1, [{"doc_id": 9, "doc_name": "samples/leave_policy.md", "chunk_count": 1}]
 
     monkeypatch.setattr(vector_store, "list_documents", fake_list_documents)

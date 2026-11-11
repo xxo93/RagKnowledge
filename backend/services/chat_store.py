@@ -88,25 +88,43 @@ async def get_session_for_user(session_id: int, user_id: int) -> Optional[dict]:
             return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
 
 
-async def list_sessions(user_id: int, limit: int = DEFAULT_SESSION_LIMIT) -> list[dict]:
+async def list_sessions(
+    user_id: int,
+    limit: int = DEFAULT_SESSION_LIMIT,
+    offset: int = 0,
+    keyword: Optional[str] = None,
+) -> tuple[int, list[dict]]:
     """按创建时间（session_id）倒序列出当前用户会话，并冗余统计记录条数。"""
     pool = get_pool()
     limit = max(1, min(int(limit or DEFAULT_SESSION_LIMIT), 500))
+    offset = max(0, int(offset or 0))
+    keyword = (keyword or "").strip()
+    where = ["s.user_id = %(uid)s"]
+    params: dict = {"uid": int(user_id), "lim": limit, "off": offset}
+    if keyword:
+        where.append("s.session_name ILIKE %(kw)s")
+        params["kw"] = f"%{keyword}%"
+    where_sql = " AND ".join(where)
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """
+                f"SELECT count(*) FROM chat_session s WHERE {where_sql}",
+                params,
+            )
+            total = int((await cur.fetchone())[0])
+            await cur.execute(
+                f"""
                 SELECT s.session_id, s.session_name, s.create_time,
                        (SELECT count(*) FROM chat_record r WHERE r.session_id = s.session_id) AS record_count
                 FROM chat_session s
-                WHERE s.user_id = %(uid)s
+                WHERE {where_sql}
                 ORDER BY s.session_id DESC
-                LIMIT %(lim)s
+                LIMIT %(lim)s OFFSET %(off)s
                 """,
-                {"uid": int(user_id), "lim": limit},
+                params,
             )
             cols = [c.name for c in cur.description]
-            return [dict(zip(cols, row)) for row in await cur.fetchall()]
+            return total, [dict(zip(cols, row)) for row in await cur.fetchall()]
 
 
 async def rename_session(session_id: int, user_id: int, session_name: str) -> dict:
@@ -132,6 +150,46 @@ async def rename_session(session_id: int, user_id: int, session_name: str) -> di
                 if row is None:
                     raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问", http_status=404)
                 return {"session_id": int(row[0]), "session_name": row[1], "create_time": row[2]}
+
+
+async def count_records(session_id: int) -> int:
+    """统计会话现有记录数；供首问自动标题判断幂等条件。"""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT count(*) FROM chat_record WHERE session_id = %(sid)s",
+                {"sid": int(session_id)},
+            )
+            return int((await cur.fetchone())[0])
+
+
+async def maybe_set_auto_title(session_id: int, user_id: int, title: str) -> Optional[str]:
+    """首问成功落库后条件更新默认会话名；用户手动改名或已有标题时不覆盖。
+
+    仅当会话名为空或默认名 `新会话` 时更新；重复回调或并发请求由 WHERE 条件保证幂等。
+    返回最终会话名；未命中更新条件时返回 None。
+    """
+    clean = (title or "").strip()
+    if not clean:
+        return None
+    clean = clean[:128]
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE chat_session
+                SET session_name = %(n)s
+                WHERE session_id = %(id)s
+                  AND user_id = %(uid)s
+                  AND (session_name IS NULL OR session_name IN ('新会话', ''))
+                RETURNING session_name
+                """,
+                {"n": clean, "id": int(session_id), "uid": int(user_id)},
+            )
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 
 async def delete_session(session_id: int, user_id: int) -> None:
@@ -204,19 +262,38 @@ async def insert_record(
         return None
 
 
-async def list_records(session_id: int) -> list[dict]:
-    """按时间正序返回会话历史，包含来源与工具调用信息。"""
+async def list_records(
+    session_id: int,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> tuple[int, list[dict]]:
+    """按时间正序返回会话历史；不传 limit 时保持全量兼容行为。"""
     pool = get_pool()
+    params: dict = {"sid": int(session_id)}
+    paging_sql = ""
+    if limit is not None:
+        limit = max(1, min(int(limit), 100))
+        paging_sql = "LIMIT %(lim)s OFFSET %(off)s"
+        params["lim"] = limit
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                """
+                "SELECT count(*) FROM chat_record WHERE session_id = %(sid)s",
+                {"sid": int(session_id)},
+            )
+            total = int((await cur.fetchone())[0])
+            if limit is not None:
+                offset = max(0, total - limit if offset is None else int(offset))
+                params["off"] = offset
+            await cur.execute(
+                f"""
                 SELECT record_id, query, answer, tool_call_info, source_ref, create_time
                 FROM chat_record
                 WHERE session_id = %(sid)s
                 ORDER BY record_id ASC
+                {paging_sql}
                 """,
-                {"sid": session_id},
+                params,
             )
             cols = [c.name for c in cur.description]
             items = [dict(zip(cols, row)) for row in await cur.fetchall()]
@@ -225,7 +302,7 @@ async def list_records(session_id: int) -> list[dict]:
                 # psycopg 已把 jsonb 解码为 list/dict；这里兜底 None
                 it.setdefault("tool_call_info", None)
                 it.setdefault("source_ref", None)
-            return items
+            return total, items
 
 
 async def recent_records(session_id: int, rounds: int) -> list[dict]:

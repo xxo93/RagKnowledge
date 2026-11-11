@@ -50,9 +50,18 @@ DOC_STATS_KEYWORDS = ("多少份", "多少篇", "数量", "统计", "条数", "�
 LLM_UNAVAILABLE_MSG = "模型服务暂时不可用，请稍后重试。"
 DB_UNAVAILABLE_MSG = "服务暂时不可用（数据库连接异常），请稍后重试。"
 
-# ---------- 工具展示标签，前端工具事件使用 ----------
-TOOL_LABELS = {
+# ---------- 工具展示标签：进行时 / 完成时两套，避免对勾叠加进行中文案 ----------
+RUNNING_LABELS = {
     "knowledge_search": "正在检索知识库…",
-    "calculator": "正在执行计算…",
+    "calculator": "正在计算…",
     "doc_stats": "正在统计文档数据…",
 }
+
+DONE_LABELS = {
+    "knowledge_search": "已检索知识库",
+    "calculator": "已完成计算",
+    "doc_stats": "已统计文档数据",
+}
+
+# 兼容旧调用方；新代码优先按 status 选择 RUNNING / DONE 标签
+TOOL_LABELS = dict(RUNNING_LABELS)

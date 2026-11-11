@@ -1,6 +1,6 @@
 <script setup>
 // 修改本人密码弹窗：仅做交互校验，长度/新旧规则后端二次强校验。
-import { ref, watch } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { changePassword } from '../api/auth'
 
@@ -12,11 +12,16 @@ const emit = defineEmits(['update:visible'])
 
 const form = ref({ old_password: '', new_password: '', confirm: '' })
 const loading = ref(false)
+const oldPasswordRef = ref(null)
 
 watch(
   () => props.visible,
-  (open) => {
-    if (open) form.value = { old_password: '', new_password: '', confirm: '' }
+  async (open) => {
+    if (open) {
+      form.value = { old_password: '', new_password: '', confirm: '' }
+      await nextTick()
+      oldPasswordRef.value?.focus?.()
+    }
   }
 )
 
@@ -71,7 +76,13 @@ async function onSubmit() {
         <el-input :model-value="username" disabled />
       </el-form-item>
       <el-form-item label="原密码">
-        <el-input v-model="form.old_password" type="password" show-password autocomplete="current-password" />
+        <el-input
+          ref="oldPasswordRef"
+          v-model="form.old_password"
+          type="password"
+          show-password
+          autocomplete="current-password"
+        />
       </el-form-item>
       <el-form-item label="新密码（至少 8 位）">
         <el-input v-model="form.new_password" type="password" show-password autocomplete="new-password" />

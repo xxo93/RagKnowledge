@@ -47,8 +47,29 @@ async def insert_document_meta(doc_name: str, file_path: str, file_size: int) ->
                 return int(row[0])
 
 
+def summarize_chunks(rows: list[dict], max_len: int = 120) -> str:
+    """确定性归并切片文本为短文档摘要；不调用额外 LLM。"""
+    parts: list[str] = []
+    length = 0
+    for r in rows:
+        text = " ".join(str(r.get("content") or "").split())
+        if not text:
+            continue
+        parts.append(text)
+        length += len(text)
+        if length >= max_len:
+            break
+    summary = " ".join(parts)
+    return summary[:max_len]
+
+
 # ---------- T2：切片批量写入 + 文档置成功，单事务原子提交 ----------
-async def commit_ingest(doc_id: int, rows: list[dict], chunk_count: int) -> None:
+async def commit_ingest(
+    doc_id: int,
+    rows: list[dict],
+    chunk_count: int,
+    summary: Optional[str] = None,
+) -> None:
     """rows: [{"chunk_index": int, "content": str, "embedding": list[float]}]"""
     pool = get_pool()
     async with pool.connection() as conn:
@@ -68,8 +89,12 @@ async def commit_ingest(doc_id: int, rows: list[dict], chunk_count: int) -> None
                         },
                     )
                 await cur.execute(
-                    "UPDATE document SET status = 1, chunk_count = %(n)s WHERE doc_id = %(id)s",
-                    {"n": chunk_count, "id": doc_id},
+                    """
+                    UPDATE document
+                    SET status = 1, chunk_count = %(n)s, summary = %(summary)s
+                    WHERE doc_id = %(id)s
+                    """,
+                    {"n": chunk_count, "id": doc_id, "summary": summary},
                 )
 
 
@@ -111,7 +136,7 @@ async def get_document_meta(doc_id: int) -> Optional[dict]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT doc_id, doc_name, file_path, status, chunk_count
+                SELECT doc_id, doc_name, file_path, status, chunk_count, summary
                 FROM document WHERE doc_id = %(id)s
                 """,
                 {"id": doc_id},
@@ -120,12 +145,17 @@ async def get_document_meta(doc_id: int) -> Optional[dict]:
             if row is None:
                 return None
             return dict(zip(
-                ["doc_id", "doc_name", "file_path", "status", "chunk_count"], row
+                ["doc_id", "doc_name", "file_path", "status", "chunk_count", "summary"], row
             ))
 
 
 # ---------- 运维：重解析后事务替换切片（先删旧切片、再写新切片、更新计数，保留 doc_id 与元数据） ----------
-async def replace_document_chunks(doc_id: int, rows: list[dict], chunk_count: int) -> None:
+async def replace_document_chunks(
+    doc_id: int,
+    rows: list[dict],
+    chunk_count: int,
+    summary: Optional[str] = None,
+) -> None:
     pool = get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
@@ -147,8 +177,12 @@ async def replace_document_chunks(doc_id: int, rows: list[dict], chunk_count: in
                         },
                     )
                 await cur.execute(
-                    "UPDATE document SET status = 1, chunk_count = %(n)s WHERE doc_id = %(id)s",
-                    {"n": chunk_count, "id": doc_id},
+                    """
+                    UPDATE document
+                    SET status = 1, chunk_count = %(n)s, summary = %(summary)s
+                    WHERE doc_id = %(id)s
+                    """,
+                    {"n": chunk_count, "id": doc_id, "summary": summary},
                 )
 
 
@@ -165,25 +199,86 @@ async def reindex_vector_index() -> None:
 
 
 # ---------- 文档分页列表（F-02；chunk_count 为冗余字段，避免 JOIN count） ----------
-async def list_documents(page: int, size: int) -> tuple[int, list[dict]]:
+async def list_documents(
+    page: int,
+    size: int,
+    keyword: Optional[str] = None,
+    status: Optional[int] = None,
+) -> tuple[int, list[dict]]:
     pool = get_pool()
     offset = (page - 1) * size
+    where: list[str] = []
+    params: dict = {"size": size, "offset": offset}
+
+    if keyword and keyword.strip():
+        where.append("doc_name ILIKE %(keyword)s")
+        params["keyword"] = f"%{keyword.strip()}%"
+    if status is not None:
+        where.append("status = %(status)s")
+        params["status"] = int(status)
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute("SELECT count(*) FROM document")
+            await cur.execute(f"SELECT count(*) FROM document {where_sql}", params)
             total = int((await cur.fetchone())[0])
             await cur.execute(
-                """
-                SELECT doc_id, doc_name, file_size, chunk_count, status, error_msg, create_time
+                f"""
+                SELECT doc_id, doc_name, file_size, chunk_count, status, error_msg, summary, create_time
                 FROM document
+                {where_sql}
                 ORDER BY doc_id DESC
                 LIMIT %(size)s OFFSET %(offset)s
                 """,
-                {"size": size, "offset": offset},
+                params,
             )
             cols = [c.name for c in cur.description]
             items = [dict(zip(cols, row)) for row in await cur.fetchall()]
             return total, items
+
+
+async def list_docs_without_summary() -> list[dict]:
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT doc_id, doc_name
+                FROM document
+                WHERE status = 1 AND summary IS NULL
+                ORDER BY doc_id ASC
+                """
+            )
+            cols = [c.name for c in cur.description]
+            return [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+
+async def get_chunks_for_summary(doc_id: int) -> list[dict]:
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT chunk_index, content
+                FROM document_chunk
+                WHERE doc_id = %(id)s
+                ORDER BY chunk_index ASC
+                """,
+                {"id": doc_id},
+            )
+            cols = [c.name for c in cur.description]
+            return [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+
+async def update_document_summary(doc_id: int, summary: str) -> None:
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE document SET summary = %(summary)s WHERE doc_id = %(id)s",
+                    {"summary": summary[:120], "id": doc_id},
+                )
 
 
 # ---------- 向量检索（F-07：余弦距离 <=>，HNSW vector_cosine_ops） ----------
@@ -205,6 +300,7 @@ async def search(
                 await cur.execute(
                     """
                     SELECT c.chunk_id, c.doc_id, d.doc_name, c.chunk_index, c.content,
+                           d.summary AS doc_summary,
                            1 - (c.embedding <=> %(qvec)s) AS score
                     FROM document_chunk c
                     JOIN document d ON d.doc_id = c.doc_id

@@ -50,7 +50,8 @@ async def reparse_document(doc_id: int) -> dict:
         )
 
     rows, chunk_count = await run_in_threadpool(_build_rows_sync, abs_path)
-    await vs.replace_document_chunks(doc_id, rows, chunk_count)
+    summary = vs.summarize_chunks(rows)
+    await vs.replace_document_chunks(doc_id, rows, chunk_count, summary=summary)
     return {
         "doc_id": doc_id,
         "doc_name": meta["doc_name"],

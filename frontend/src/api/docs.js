@@ -20,6 +20,81 @@ export function uploadDocsBatch(files) {
   })
 }
 
+// 生成分块上传会话 id（优先 randomUUID，旧浏览器退化为手写 UUID v4）
+export function makeUploadId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+/**
+ * 分块上传单个文件（大文件不一次性读进内存，也不会触发单请求体积上限）
+ *
+ * @param {File} file 待上传文件
+ * @param {object} options
+ * @param {number} [options.chunkSize=4MB] 每片字节数，由调用方按 MB 换算
+ * @param {number} [options.concurrency=3] 同时在传的分片数
+ * @param {(p:{loaded:number,total:number,percent:number,chunkCount:number})=>void} [options.onProgress] 进度回调
+ * @returns {Promise<{doc_id:number, chunk_count:number, status:number}>}
+ */
+export async function uploadDocChunked(file, options = {}) {
+  const chunkSize = Math.max(1, options.chunkSize || 4 * 1024 * 1024)
+  const concurrency = Math.max(1, options.concurrency || 3)
+  const onProgress = options.onProgress
+  const uploadId = makeUploadId()
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))
+
+  let loaded = 0
+  let nextIndex = 0
+  const report = () => onProgress?.({
+    loaded,
+    total: file.size,
+    percent: file.size ? Math.min(100, Math.round((loaded / file.size) * 100)) : 100,
+    chunkCount: totalChunks
+  })
+
+  // 并发池：固定 worker 数量，从共享游标取分片序号，避免一次性发起 N 个请求
+  async function worker() {
+    while (true) {
+      const index = nextIndex++
+      if (index >= totalChunks) return
+      const start = index * chunkSize
+      const blob = file.slice(start, Math.min(start + chunkSize, file.size))
+      const form = new FormData()
+      form.append('upload_id', uploadId)
+      form.append('chunk_index', String(index))
+      form.append('total_chunks', String(totalChunks))
+      form.append('file', blob, `${file.name}.part${index}`)
+      await http.post('/docs/upload/chunk', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000 // 单个分片的超时放宽到 5 分钟，避免弱网误判
+      })
+      loaded += blob.size
+      report()
+    }
+  }
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, totalChunks) }, worker))
+    const result = await http.post('/docs/upload/complete', {
+      upload_id: uploadId,
+      file_name: file.name,
+      total_chunks: totalChunks
+    }, { timeout: 300000 })
+    onProgress?.({ loaded: file.size, total: file.size, percent: 100, chunkCount: totalChunks })
+    return result
+  } catch (e) {
+    // 失败时清理服务端已落盘的分片，避免遗留临时文件
+    http.delete('/docs/upload/chunk', { params: { upload_id: uploadId } }).catch(() => {})
+    throw e
+  }
+}
+
 // POST /api/docs/{doc_id}/reparse —— 重读原件并事务替换切片向量
 export function reparseDoc(docId) {
   return http.post(`/docs/${docId}/reparse`)
@@ -30,9 +105,12 @@ export function rebuildIndex() {
   return http.post('/docs/reindex')
 }
 
-// GET /api/docs/list?page=&size=
-export function listDocs(page = 1, size = 10) {
-  return http.get('/docs/list', { params: { page, size } })
+// GET /api/docs/list?page=&size=&keyword=&status=
+export function listDocs(page = 1, size = 10, filters = {}) {
+  const params = { page, size }
+  if (filters.keyword) params.keyword = filters.keyword
+  if (filters.status && filters.status !== 'all') params.status = filters.status
+  return http.get('/docs/list', { params })
 }
 
 // DELETE /api/docs/{doc_id}

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -15,6 +16,43 @@ from prompts import NO_RESULT_FALLBACK, LLM_UNAVAILABLE_MSG
 from services import embedder as embed_mod, vector_store as vs, reranker
 
 logger = logging.getLogger("rag.rag")
+
+
+def _doc_title(doc_name: str) -> str:
+    """由文件名生成展示标题：去扩展名、下划线转空格；失败时回退原文件名。"""
+    name = (doc_name or "未命名文档").strip()
+    title = re.sub(r"\.[A-Za-z0-9]+$", "", name).replace("_", " ").strip()
+    return title or name
+
+
+def _summary(content: str) -> str:
+    """片段摘要：取首句，截断 80 字；无句号时回退前 80 字。"""
+    text = (content or "").strip()
+    if not text:
+        return ""
+    first = re.split(r"[。！？!?\n]", text, maxsplit=1)[0].strip()
+    return (first or text)[:80]
+
+
+def _source_fields(h: dict) -> dict:
+    """组装来源富字段；doc_id/chunk_id 保留定位能力，旧前端按既有字段兜底。"""
+    content = h.get("content") or ""
+    excerpt = content[: settings.SOURCE_EXCERPT_CHARS]
+    fields = {
+        "doc_name": h.get("doc_name"),
+        "doc_title": _doc_title(h.get("doc_name") or ""),
+        "chunk_id": h.get("chunk_id"),
+        "doc_id": h.get("doc_id"),
+        "chunk_index": h.get("chunk_index"),
+        "doc_summary": h.get("doc_summary") or "",
+        "score": round(float(h["score"]), 4),
+        "snippet": content[:200],
+        "summary": _summary(content),
+        "excerpt": excerpt,
+    }
+    if h.get("rerank_score") is not None:
+        fields["rerank_score"] = h["rerank_score"]
+    return fields
 
 
 @dataclass
@@ -56,18 +94,9 @@ async def retrieve(query: str, doc_ids: list[int] | None = None) -> list[dict]:
             continue
         seen.add(key)
         content = h.get("content") or ""
-        item = {
-            "chunk_id": h.get("chunk_id"),
-            "doc_id": h["doc_id"],
-            "doc_name": h["doc_name"],
-            "chunk_index": h["chunk_index"],
-            "score": round(float(h["score"]), 4),
-            "content": content,
-            "snippet": content[:200],
-        }
-        # T6：重排开启且命中项带 rerank_score 时一并透出；关闭/降级项无此键，前端隐藏
-        if h.get("rerank_score") is not None:
-            item["rerank_score"] = h["rerank_score"]
+        item = _source_fields(h)
+        # 完整 content 仅供 build_prompt 使用，不落进对外来源卡片字段
+        item["content"] = content
         results.append(item)
     return results
 
@@ -100,17 +129,7 @@ async def answer(query: str, history: list[dict] | None = None) -> RagResult:
     if not hits:
         return RagResult(answer=NO_RESULT_FALLBACK, sources=[], has_hit=False, hits=[])
 
-    sources = []
-    for h in hits:
-        src = {
-            "doc_name": h["doc_name"],
-            "chunk_index": h["chunk_index"],
-            "score": h["score"],
-            "snippet": h["snippet"],
-        }
-        if h.get("rerank_score") is not None:
-            src["rerank_score"] = h["rerank_score"]
-        sources.append(src)
+    sources = [_source_fields(h) for h in hits]
     return RagResult(answer="", sources=sources, has_hit=True, hits=hits)
 
 
