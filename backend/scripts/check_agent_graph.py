@@ -22,12 +22,12 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from config import settings  # noqa: E402
-from services import vector_store as vs  # noqa: E402
-import agent.graph as graph  # noqa: E402
+import backend.db  # noqa: E402
+from backend.config import settings  # noqa: E402
+from backend.services import vector_store as vs  # noqa: E402
+import backend.agent.graph as graph  # noqa: E402
 
 # 离线确定性回归：关闭 LLM 首选决策，避免联网/产生 token 费用；LLM 决策由 check_chat_sse 真实验证
 settings.LLM_PLAN_ENABLED = False

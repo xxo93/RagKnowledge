@@ -11,9 +11,9 @@ import re
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from config import settings
-from prompts import NO_RESULT_FALLBACK, LLM_UNAVAILABLE_MSG
-from services import embedder as embed_mod, vector_store as vs, reranker
+from ..config import settings
+from ..prompts import NO_RESULT_FALLBACK, LLM_UNAVAILABLE_MSG
+from . import embedder as embed_mod, vector_store as vs, reranker
 
 logger = logging.getLogger("rag.rag")
 
@@ -49,6 +49,8 @@ def _source_fields(h: dict) -> dict:
         "snippet": content[:200],
         "summary": _summary(content),
         "excerpt": excerpt,
+        # 来源类型：前端据此区分"内部文档"与"联网结果"，联网项没有 doc_* 字段
+        "source_type": "knowledge",
     }
     if h.get("rerank_score") is not None:
         fields["rerank_score"] = h["rerank_score"]
@@ -70,21 +72,37 @@ async def retrieve(query: str, doc_ids: list[int] | None = None) -> list[dict]:
     content(全文，供 build_prompt) / snippet(≤200 字，供来源卡片)。
 
     - 空问题直接返回 []（不向量化、不查库）；
-    - RERANK_ENABLED 开启时经 reranker.maybe_rerank 重排（默认关闭则原样返回）；
-    - RETRIEVAL_MIN_SCORE > 0 时应用层按相似度过滤（默认 0.0 不过滤）；
+    - 检索参数全部来自运行时配置中心（候选召回数 / 重排开关与保留数 / 相似度阈值 / Top-K），
+      可在管理员配置页在线调整，无需重启；
+    - 重排在有候选时按 rerank 分数排序，但**阈值只打在余弦相似度 score 上**：
+      rerank 分不是 0–1 校准概率，做绝对过滤会大面积误杀；
+    - 过滤后不显式截断到 Top-K 之外的候选不会进入生成与来源卡片；
     - 按 (doc_id, chunk_index) 去重，避免重叠切片重复展示（架构 §3.2 片段去重）。
     """
     q = (query or "").strip()
     if not q:
         return []
 
+    from . import app_config
+
+    candidates = int(await app_config.get_value("RETRIEVAL_CANDIDATES"))
+    top_k = int(await app_config.get_value("TOP_K"))
+    min_score = float(await app_config.get_value("RETRIEVAL_MIN_SCORE"))
+    rerank_enabled = bool(await app_config.get_value("RERANK_ENABLED"))
+    rerank_top_n = int(await app_config.get_value("RERANK_TOP_N"))
+
     emb = embed_mod.get_embedder()
     qvec = emb.embed_query(q)
-    hits = await vs.search(qvec, settings.TOP_K, doc_ids=doc_ids)
-    hits = await reranker.maybe_rerank(q, hits)
+    hits = await vs.search(qvec, max(candidates, top_k), doc_ids=doc_ids)
+    hits = await reranker.maybe_rerank(
+        q, hits, enabled=rerank_enabled, top_n=rerank_top_n
+    )
 
-    if settings.RETRIEVAL_MIN_SCORE > 0:
-        hits = [h for h in hits if float(h.get("score", 0.0)) >= settings.RETRIEVAL_MIN_SCORE]
+    if min_score > 0:
+        hits = [h for h in hits if float(h.get("score", 0.0)) >= min_score]
+
+    # 过滤后再截断：先截断会让"候选里排后面但够阈值"的片段被提前丢掉
+    hits = hits[:top_k]
 
     results: list[dict] = []
     seen: set[tuple[int, int]] = set()
@@ -103,7 +121,7 @@ async def retrieve(query: str, doc_ids: list[int] | None = None) -> list[dict]:
 
 def build_prompt(hits: list[dict], query: str, history: list[dict]) -> list[dict]:
     """拼装 RAG 消息（架构 §3.2 Prompt 结构）：系统约束 + 参考资料 + 历史 + 当前问题。"""
-    from prompts import RAG_SYSTEM_PROMPT
+    from ..prompts import RAG_SYSTEM_PROMPT
 
     context = "\n\n".join(
         f"[{i + 1}]《{h['doc_name']}》片段 #{h['chunk_index']}（相似度 {h['score']:.2f}）\n{h['content']}"
@@ -148,7 +166,7 @@ async def stream_answer(
 
     messages = build_prompt(hits, query, history or [])
     try:
-        from llm import chat_stream
+        from ..llm import chat_stream
 
         async for token in chat_stream(messages):
             yield token
@@ -158,3 +176,64 @@ async def stream_answer(
         for i, h in enumerate(hits[:3]):
             snippet = (h.get("snippet") or "").strip()[:120]
             yield f"\n[参考{i + 1}]《{h['doc_name']}》#{h.get('chunk_index')}：{snippet}"
+
+
+def web_sources(items: list[dict]) -> list[dict]:
+    """把搜索服务返回项规范成来源卡片字段；联网项没有 doc_id/chunk_index。"""
+    sources: list[dict] = []
+    for i, item in enumerate(items):
+        url = (item.get("url") or "").strip()
+        if not url:
+            continue
+        # 百炼的 search_results 只有 title/url/site_name，没有摘要片段；
+        # 这时用站点名兜底，避免卡片出现空白摘要行
+        snippet = (item.get("snippet") or "").strip()
+        if not snippet and item.get("site"):
+            snippet = f"来源站点：{item['site']}"
+        sources.append(
+            {
+                "source_type": "web",
+                "doc_name": item.get("site") or item.get("title") or url,
+                "doc_title": (item.get("title") or url)[:120],
+                "url": url,
+                "snippet": snippet[:200],
+                "summary": snippet[:80],
+                "rank": i + 1,
+            }
+        )
+    return sources
+
+
+def _build_web_prompt(items: list[dict], query: str, history: list[dict]) -> list[dict]:
+    from ..prompts import WEB_ANSWER_SYSTEM_PROMPT
+
+    context = "\n\n".join(
+        f"[{i + 1}] {item.get('title') or item.get('url')}\n来源：{item.get('site') or item.get('url')}\n"
+        f"摘要：{item.get('snippet') or ''}"
+        for i, item in enumerate(items)
+    )
+    return [
+        {"role": "system", "content": WEB_ANSWER_SYSTEM_PROMPT},
+        {"role": "system", "content": f"【联网检索结果】\n{context}"},
+        *history,
+        {"role": "user", "content": query},
+    ]
+
+
+async def stream_web_answer(
+    items: list[dict], query: str, history: list[dict] | None = None
+) -> AsyncIterator[str]:
+    """联网兜底的流式生成：只用检索结果作答；LLM 不可用时退化为结果摘要（仍算 web 来源）。"""
+    messages = _build_web_prompt(items, query, history or [])
+    try:
+        from ..llm import chat_stream
+
+        async for token in chat_stream(messages):
+            yield token
+    except Exception as exc:  # noqa: BLE001 - 不击穿 SSE
+        logger.warning("联网兜底答案生成失败，降级为结果摘要：%s", exc)
+        yield LLM_UNAVAILABLE_MSG + "\n"
+        for i, item in enumerate(items[:3]):
+            snippet = (item.get("snippet") or "").strip()[:120]
+            yield f"\n[{i + 1}]《{item.get('title') or item.get('url')}》{snippet}"
+

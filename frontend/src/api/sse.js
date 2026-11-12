@@ -127,6 +127,10 @@ function dispatch(frame, handlers) {
     case 'tool': handlers.onTool?.(data); break
     case 'token': handlers.onToken?.(data); break
     case 'source': handlers.onSource?.(data); break
+    // 提示帧（M3）：联网兜底正在使用 / 联网不可用等，需在正文前告知用户能力边界
+    case 'notice': handlers.onNotice?.(data); break
+    // 表格帧（M4）：业务库查询结果，服务端已脱敏并限制行数
+    case 'table': handlers.onTable?.(data); break
     case 'done': handlers.onDone?.(data); break
     case 'error': handlers.onError?.(data); break
     default: break

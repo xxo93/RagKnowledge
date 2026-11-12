@@ -19,9 +19,6 @@ jobs:
   backend-offline:
     name: backend offline tests & assembly
     runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,16 +31,16 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r backend/requirements.txt
 
       - name: Offline unit tests (pytest, no DB / no network)
-        run: python -m pytest tests -q
+        run: python -m pytest backend/tests -q
 
       - name: Import & FastAPI assembly self-check (no DB, no LLM)
-        run: python scripts/check_env.py
+        run: python backend/scripts/check_env.py
 
       - name: Static byte-compile (compile only, no execution, no network)
-        run: python -m compileall -q .
+        run: python -m compileall -q backend
 
   frontend-build:
     name: frontend production build

@@ -1,5 +1,5 @@
 """文档级确定性摘要纯函数离线测试。"""
-from services.vector_store import summarize_chunks
+from backend.services.vector_store import summarize_chunks
 
 
 def test_summarize_chunks_truncates_to_max_len():

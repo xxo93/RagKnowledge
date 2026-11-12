@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 
-from config import settings
-from services import chat_store
+from ..config import settings
+from . import chat_store
 
 logger = logging.getLogger("rag.memory")
 

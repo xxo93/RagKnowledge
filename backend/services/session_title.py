@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from config import settings
+from ..config import settings
 
 # 句末疑问/语气词与常见标点；标题不依赖这些字符表达语义
 _TRAILING_PARTICLES = "吗呢啊呀嘛吧哦啦嗯？?！!。.，,、；;：: "

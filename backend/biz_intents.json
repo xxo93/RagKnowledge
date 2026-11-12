@@ -1,0 +1,537 @@
+{
+  "version": 1,
+  "updated_at": "2026-11-11",
+  "global_limits": {
+    "inline_max_rows": 100,
+    "hard_max_rows": 3000,
+    "default_time_range_days": 90,
+    "statement_timeout_ms": 5000
+  },
+  "intents": [
+    {
+      "intent_id": "order_by_customer",
+      "title": "按客户查订单",
+      "examples": [
+        "查一下客户张三的订单",
+        "张三最近买了什么",
+        "客户李四过去90天的订单金额"
+      ],
+      "keywords": [
+        "订单",
+        "买了",
+        "下单",
+        "消费"
+      ],
+      "schema": "biz_a",
+      "tables": [
+        "customer",
+        "orders",
+        "product"
+      ],
+      "sql": "SELECT o.order_no, c.name AS customer_name, c.phone AS customer_phone, p.name AS product_name, o.qty, o.amount, o.status, o.created_at FROM biz_a.orders o JOIN biz_a.customer c ON c.id = o.customer_id JOIN biz_a.product p ON p.id = o.product_id WHERE c.name = %(customer_name)s AND o.created_at >= (CURRENT_DATE - %(since_days)s::int) ORDER BY o.created_at DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "customer_name",
+          "type": "string",
+          "required": true,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "张三"
+        },
+        {
+          "name": "since_days",
+          "type": "number",
+          "required": false,
+          "min": 1,
+          "max": 365,
+          "default": 90,
+          "example": 90
+        }
+      ],
+      "allowed_roles": [
+        "admin"
+      ],
+      "max_rows": 100,
+      "columns": [
+        {
+          "key": "order_no",
+          "title": "订单号"
+        },
+        {
+          "key": "customer_name",
+          "title": "客户",
+          "mask": "name"
+        },
+        {
+          "key": "customer_phone",
+          "title": "手机号",
+          "mask": "phone"
+        },
+        {
+          "key": "product_name",
+          "title": "商品"
+        },
+        {
+          "key": "qty",
+          "title": "数量"
+        },
+        {
+          "key": "amount",
+          "title": "金额"
+        },
+        {
+          "key": "status",
+          "title": "状态"
+        },
+        {
+          "key": "created_at",
+          "title": "下单时间",
+          "type": "datetime"
+        }
+      ]
+    },
+    {
+      "intent_id": "inventory_by_sku",
+      "title": "按 SKU 查库存",
+      "examples": [
+        "查一下 SKU P001 的库存",
+        "P003 各仓库还有多少库存",
+        "商品 P010 的库存数量"
+      ],
+      "keywords": [
+        "库存",
+        "仓库",
+        "SKU",
+        "存货"
+      ],
+      "schema": "biz_a",
+      "tables": [
+        "inventory",
+        "product"
+      ],
+      "sql": "SELECT i.sku, p.name AS product_name, p.category, i.warehouse, i.qty, i.updated_at FROM biz_a.inventory i JOIN biz_a.product p ON p.id = i.product_id WHERE i.sku ILIKE %(sku_like)s ORDER BY i.qty DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "sku",
+          "type": "string",
+          "required": true,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "P001"
+        }
+      ],
+      "allowed_roles": [
+        "admin",
+        "member"
+      ],
+      "max_rows": 100,
+      "columns": [
+        {
+          "key": "sku",
+          "title": "SKU"
+        },
+        {
+          "key": "product_name",
+          "title": "商品"
+        },
+        {
+          "key": "category",
+          "title": "类目"
+        },
+        {
+          "key": "warehouse",
+          "title": "仓库"
+        },
+        {
+          "key": "qty",
+          "title": "库存数量"
+        },
+        {
+          "key": "updated_at",
+          "title": "更新时间",
+          "type": "datetime"
+        }
+      ]
+    },
+    {
+      "intent_id": "customer_profile",
+      "title": "查客户资料",
+      "examples": [
+        "查一下客户张三的资料",
+        "客户李四的手机号和城市",
+        "张三的注册时间和邮箱"
+      ],
+      "keywords": [
+        "客户资料",
+        "客户信息",
+        "联系方式",
+        "手机号",
+        "邮箱"
+      ],
+      "schema": "biz_a",
+      "tables": [
+        "customer"
+      ],
+      "sql": "SELECT c.name, c.phone, c.id_card, c.email, c.city, c.register_date FROM biz_a.customer c WHERE c.name = %(customer_name)s LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "customer_name",
+          "type": "string",
+          "required": true,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "张三"
+        }
+      ],
+      "allowed_roles": [
+        "admin"
+      ],
+      "max_rows": 20,
+      "columns": [
+        {
+          "key": "name",
+          "title": "姓名",
+          "mask": "name"
+        },
+        {
+          "key": "phone",
+          "title": "手机号",
+          "mask": "phone"
+        },
+        {
+          "key": "id_card",
+          "title": "身份证",
+          "mask": "id_card"
+        },
+        {
+          "key": "email",
+          "title": "邮箱",
+          "mask": "email"
+        },
+        {
+          "key": "city",
+          "title": "城市"
+        },
+        {
+          "key": "register_date",
+          "title": "注册时间",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "intent_id": "employee_attendance",
+      "title": "查员工考勤",
+      "examples": [
+        "查一下员工E1001上个月的考勤",
+        "我上周的考勤记录",
+        "张三这个月的打卡情况"
+      ],
+      "keywords": [
+        "考勤",
+        "打卡",
+        "迟到",
+        "请假",
+        "出勤"
+      ],
+      "schema": "biz_b",
+      "tables": [
+        "employee",
+        "attendance"
+      ],
+      "sql": "SELECT e.employee_no, e.name AS employee_name, e.dept, a.work_date, a.check_in, a.check_out, a.status FROM biz_b.attendance a JOIN biz_b.employee e ON e.id = a.employee_id WHERE a.work_date >= (CURRENT_DATE - %(since_days)s::int) AND e.name = %(employee_name)s ORDER BY a.work_date DESC LIMIT %(limit)s",
+      "sql_self": "SELECT e.employee_no, e.name AS employee_name, e.dept, a.work_date, a.check_in, a.check_out, a.status FROM biz_b.attendance a JOIN biz_b.employee e ON e.id = a.employee_id WHERE a.work_date >= (CURRENT_DATE - %(since_days)s::int) AND e.user_id = %(user_id)s ORDER BY a.work_date DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "employee_name",
+          "type": "string",
+          "required": false,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "张三"
+        },
+        {
+          "name": "since_days",
+          "type": "number",
+          "required": false,
+          "min": 1,
+          "max": 90,
+          "default": 30,
+          "example": 30
+        }
+      ],
+      "allowed_roles": [
+        "admin",
+        "member_self"
+      ],
+      "max_rows": 100,
+      "columns": [
+        {
+          "key": "employee_no",
+          "title": "工号"
+        },
+        {
+          "key": "employee_name",
+          "title": "姓名",
+          "mask": "name"
+        },
+        {
+          "key": "dept",
+          "title": "部门"
+        },
+        {
+          "key": "work_date",
+          "title": "日期",
+          "type": "date"
+        },
+        {
+          "key": "check_in",
+          "title": "上班打卡"
+        },
+        {
+          "key": "check_out",
+          "title": "下班打卡"
+        },
+        {
+          "key": "status",
+          "title": "状态"
+        }
+      ]
+    },
+    {
+      "intent_id": "payroll_by_employee",
+      "title": "查员工薪资",
+      "examples": [
+        "查一下员工E1001上个月的薪资",
+        "我本月的工资条",
+        "张三2026-09的薪资明细"
+      ],
+      "keywords": [
+        "薪资",
+        "工资",
+        "工资条",
+        "绩效",
+        "奖金"
+      ],
+      "schema": "biz_b",
+      "tables": [
+        "employee",
+        "payroll"
+      ],
+      "sql": "SELECT e.employee_no, e.name AS employee_name, p.period, p.base_salary, p.bonus, p.deduction, p.net_salary FROM biz_b.payroll p JOIN biz_b.employee e ON e.id = p.employee_id WHERE p.period >= %(period_since)s AND e.name = %(employee_name)s ORDER BY p.period DESC LIMIT %(limit)s",
+      "sql_self": "SELECT e.employee_no, e.name AS employee_name, p.period, p.base_salary, p.bonus, p.deduction, p.net_salary FROM biz_b.payroll p JOIN biz_b.employee e ON e.id = p.employee_id WHERE p.period >= %(period_since)s AND e.user_id = %(user_id)s ORDER BY p.period DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "employee_name",
+          "type": "string",
+          "required": false,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "张三"
+        },
+        {
+          "name": "period",
+          "type": "string",
+          "required": false,
+          "pattern": "^\\d{4}-\\d{2}$",
+          "example": "2026-09"
+        }
+      ],
+      "allowed_roles": [
+        "admin",
+        "member_self"
+      ],
+      "max_rows": 20,
+      "columns": [
+        {
+          "key": "employee_no",
+          "title": "工号"
+        },
+        {
+          "key": "employee_name",
+          "title": "姓名",
+          "mask": "name"
+        },
+        {
+          "key": "period",
+          "title": "薪资期间"
+        },
+        {
+          "key": "base_salary",
+          "title": "基本工资"
+        },
+        {
+          "key": "bonus",
+          "title": "奖金"
+        },
+        {
+          "key": "deduction",
+          "title": "扣款"
+        },
+        {
+          "key": "net_salary",
+          "title": "实发"
+        }
+      ]
+    },
+    {
+      "intent_id": "customer_orders_by_employee",
+      "title": "按员工查名下客户订单",
+      "examples": [
+        "查一下员工杨帆名下客户的订单",
+        "杨帆负责的客户最近90天下了什么订单",
+        "员工黄晓名下客户买过哪些商品"
+      ],
+      "keywords": [
+        "名下客户",
+        "负责的客户",
+        "归属客户",
+        "员工的客户"
+      ],
+      "schema": "biz_b",
+      "schemas": [
+        "biz_b",
+        "biz_a"
+      ],
+      "tables": [
+        "employee",
+        "customer",
+        "orders"
+      ],
+      "sql": "SELECT e.employee_no, e.name AS employee_name, e.dept, c.name AS customer_name, o.order_no, o.amount, o.status, o.created_at FROM biz_a.orders o JOIN biz_a.customer c ON c.id = o.customer_id JOIN biz_b.employee e ON e.id = c.owner_employee_id WHERE e.name = %(employee_name)s AND o.created_at >= (CURRENT_DATE - %(since_days)s::int) ORDER BY o.created_at DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "employee_name",
+          "type": "string",
+          "required": true,
+          "min_length": 1,
+          "max_length": 20,
+          "example": "杨帆"
+        },
+        {
+          "name": "since_days",
+          "type": "number",
+          "required": false,
+          "min": 1,
+          "max": 365,
+          "default": 90,
+          "example": 90
+        }
+      ],
+      "allowed_roles": [
+        "admin"
+      ],
+      "max_rows": 100,
+      "columns": [
+        {
+          "key": "employee_no",
+          "title": "工号"
+        },
+        {
+          "key": "employee_name",
+          "title": "员工",
+          "mask": "name"
+        },
+        {
+          "key": "dept",
+          "title": "部门"
+        },
+        {
+          "key": "customer_name",
+          "title": "客户",
+          "mask": "name"
+        },
+        {
+          "key": "order_no",
+          "title": "订单号"
+        },
+        {
+          "key": "amount",
+          "title": "金额"
+        },
+        {
+          "key": "status",
+          "title": "状态"
+        },
+        {
+          "key": "created_at",
+          "title": "下单时间",
+          "type": "datetime"
+        }
+      ]
+    },
+    {
+      "intent_id": "recent_orders",
+      "title": "近 N 天订单列表",
+      "examples": [
+        "查一下最近90天的全部订单",
+        "近30天的订单列表",
+        "把最近半年的订单明细列出来"
+      ],
+      "keywords": [
+        "订单列表",
+        "最近订单",
+        "全部订单",
+        "订单明细",
+        "所有订单"
+      ],
+      "schema": "biz_a",
+      "schemas": [
+        "biz_a"
+      ],
+      "tables": [
+        "orders",
+        "customer",
+        "product"
+      ],
+      "sql": "SELECT o.order_no, c.name AS customer_name, p.name AS product_name, o.qty, o.amount, o.status, o.created_at FROM biz_a.orders o JOIN biz_a.customer c ON c.id = o.customer_id JOIN biz_a.product p ON p.id = o.product_id WHERE o.created_at >= (CURRENT_DATE - %(since_days)s::int) ORDER BY o.created_at DESC LIMIT %(limit)s",
+      "params": [
+        {
+          "name": "since_days",
+          "type": "number",
+          "required": false,
+          "min": 1,
+          "max": 365,
+          "default": 90,
+          "example": 90
+        }
+      ],
+      "allowed_roles": [
+        "admin"
+      ],
+      "max_rows": 3000,
+      "columns": [
+        {
+          "key": "order_no",
+          "title": "订单号"
+        },
+        {
+          "key": "customer_name",
+          "title": "客户",
+          "mask": "name"
+        },
+        {
+          "key": "product_name",
+          "title": "商品"
+        },
+        {
+          "key": "qty",
+          "title": "数量"
+        },
+        {
+          "key": "amount",
+          "title": "金额"
+        },
+        {
+          "key": "status",
+          "title": "状态"
+        },
+        {
+          "key": "created_at",
+          "title": "下单时间",
+          "type": "datetime"
+        }
+      ]
+    }
+  ]
+}

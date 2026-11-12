@@ -5,9 +5,11 @@ import { ElMessage } from 'element-plus'
 import ToolChip from './ToolChip.vue'
 import ErrorState from './ErrorState.vue'
 import SourceList from './SourceList.vue'
+import DataTableCard from './DataTableCard.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import MessageAvatar from './MessageAvatar.vue'
 import { AGENT_NAME } from '../config/brand.js'
+import { useTypewriter } from '../composables/useTypewriter'
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -17,6 +19,12 @@ const props = defineProps({
 
 const role = computed(() => props.message.role || 'assistant')
 const userName = computed(() => props.currentUser?.display_name || props.currentUser?.username || '')
+
+// 流式正文按打字机节奏播放；历史消息与已完成的回答直接整段显示
+const typedContent = useTypewriter(
+  () => (role.value === 'assistant' ? props.message.content : ''),
+  () => Boolean(props.message.streaming)
+)
 const showStageHint = computed(() => role.value === 'assistant' && props.message.streaming && !props.message.toolCalls?.length)
 
 const copied = ref(false)
@@ -24,6 +32,32 @@ const sourceListRef = ref(null)
 const sourceCount = computed(() => props.message.source_count ?? props.message.sources?.length ?? 0)
 const visibleTools = computed(() => (props.message.toolCalls || []).slice(0, 3))
 const extraToolCount = computed(() => Math.max(0, (props.message.toolCalls || []).length - 3))
+
+// 能力链路标签：让用户一眼看出这条回答是不是内部知识库给的
+const modeInfo = computed(() => {
+  const mode = props.message.answerMode
+  if (mode === 'web') return { label: '联网检索 · 非内部知识', type: 'warning' }
+  if (mode === 'fallback_contact' || mode === 'fallback_guide') return { label: '未命中内部知识库', type: 'info' }
+  if (mode === 'tool') return { label: '工具计算', type: 'success' }
+  if (mode === 'biz_query') return { label: '业务库查询 · 已脱敏', type: 'success' }
+  if (mode === 'chat') return { label: '通用对话', type: 'info' }
+  return null
+})
+
+const noticeText = computed(() => {
+  if (props.message.notice?.msg) return props.message.notice.msg
+  // 历史回放没有 notice 帧，按 answer_mode 还原同一句提示
+  if (props.message.answerMode === 'web') {
+    return '本条回答来自联网检索，不属于企业内部知识库能力，仅供参考。'
+  }
+  return ''
+})
+const noticeLevel = computed(() => props.message.notice?.level || 'info')
+
+// 早期业务库回答没有落库 table_payload，回放时表格与下载链接无法还原：给出可操作的补救提示
+const legacyBizHint = computed(
+  () => props.message.answerMode === 'biz_query' && !props.message.table && !props.message.streaming
+)
 
 function formatElapsed(ms) {
   if (ms === null || ms === undefined) return ''
@@ -70,14 +104,24 @@ function onCite(index) {
 
         <div v-if="showStageHint" class="stage-hint">正在理解问题…</div>
 
+        <div v-if="modeInfo || noticeText" class="mode-row">
+          <el-tag v-if="modeInfo" size="small" :type="modeInfo.type" effect="plain">{{ modeInfo.label }}</el-tag>
+        </div>
+        <div v-if="noticeText" class="notice mode" :class="noticeLevel">{{ noticeText }}</div>
+
         <MarkdownRenderer
           v-if="role === 'assistant'"
-          :content="message.content"
+          :content="typedContent"
           :streaming="message.streaming"
           :sources="message.sources"
           @cite="onCite"
         />
         <div v-else class="plain-content">{{ message.content }}</div>
+
+        <DataTableCard v-if="message.table" :table="message.table" />
+        <div v-else-if="legacyBizHint" class="notice mode info">
+          这是早期业务库回答，当时未保存表格明细；可点下方「重试」重新查询获取表格与 CSV 下载链接。
+        </div>
 
         <div v-if="message.aborted" class="notice aborted">已中断回答，以下内容未完成，可重试或继续提问。</div>
         <div v-if="message.saved === false" class="notice warn">本次回答未保存到历史记录。</div>
@@ -179,6 +223,23 @@ function onCite(index) {
   flex-wrap: wrap;
 }
 
+/* 窄屏时工具标签（如「已查询业务库 · 近 N 天订单列表 100 行（共 300 行，已截断）」）允许换行，
+   避免 el-tag 默认 nowrap 把气泡撑出视口被裁切 */
+.tools :deep(.el-tag) {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.mode-row :deep(.el-tag) {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .stage-hint {
   font-size: 13px;
   color: var(--text-muted);
@@ -205,6 +266,27 @@ function onCite(index) {
 .notice.warn {
   color: var(--text-muted);
   background: var(--primary-light);
+}
+
+/* 能力边界提示条：联网/兜底时展示在正文上方，与"已中断/未保存"提示区分色板 */
+.mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.notice.mode {
+  margin-top: 0;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-left: 3px solid var(--primary);
+}
+
+.notice.mode.warning {
+  color: var(--warning);
+  background: var(--warning-light);
+  border-left-color: var(--warning);
 }
 
 .message-footer {

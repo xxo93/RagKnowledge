@@ -19,8 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Protocol, runtime_checkable
 
-from config import settings
-from errors import BizError, ERR_INGEST_FAILED
+from ..config import settings
+from ..errors import BizError, ERR_INGEST_FAILED
 
 logger = logging.getLogger("rag.embedder")
 

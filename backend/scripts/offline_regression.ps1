@@ -15,9 +15,10 @@ param(
 
 $ErrorActionPreference = "Continue"
 $BackendDir = Split-Path -Parent $PSScriptRoot
-Set-Location $BackendDir
+$RepoRoot = Split-Path -Parent $BackendDir
+Set-Location $RepoRoot
 
-$python = Join-Path $BackendDir "..\.venv\Scripts\python.exe"
+$python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
 
 $script:fail = 0
@@ -45,12 +46,12 @@ function Run-Step {
     }
 }
 
-Run-Step -Name "pytest offline unit tests" -Exe $python -ArgList @("-m", "pytest", "tests", "-q")
-Run-Step -Name "check_env import & assembly" -Exe $python -ArgList @("scripts\check_env.py")
-Run-Step -Name "static compileall" -Exe $python -ArgList @("-m", "compileall", "-q", ".")
+Run-Step -Name "pytest offline unit tests" -Exe $python -ArgList @("-m", "pytest", "backend\tests", "-q")
+Run-Step -Name "check_env import & assembly" -Exe $python -ArgList @("backend\scripts\check_env.py")
+Run-Step -Name "static compileall" -Exe $python -ArgList @("-m", "compileall", "-q", "backend")
 
 if ($Frontend) {
-    $feDir = Join-Path $BackendDir "..\frontend"
+    $feDir = Join-Path $RepoRoot "frontend"
     Push-Location $feDir
     Write-Host ""
     Write-Host "== frontend npm ci =="

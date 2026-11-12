@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
-from config import settings
-from services import reranker
+from backend.config import settings
+from backend.services import reranker
 
 # 与真实来源结构对齐的最小候选（仅用于重排打分，不入库、不联网 Embedding）
 CANDIDATES = [

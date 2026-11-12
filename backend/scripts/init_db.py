@@ -19,11 +19,11 @@ from pathlib import Path
 # 兼容直接 `python scripts/init_db.py` 的运行方式：把 backend 目录加入 sys.path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+    sys.path.insert(0, str(BACKEND_DIR.parent))
 
 import psycopg  # noqa: E402
 
-from config import settings  # noqa: E402
+from backend.config import settings  # noqa: E402
 
 SQL_FILE = BACKEND_DIR / "init_db.sql"
 

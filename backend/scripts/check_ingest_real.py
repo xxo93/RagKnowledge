@@ -17,11 +17,11 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from errors import BizError  # noqa: E402
-from services import ingest, vector_store as vs, embedder as em  # noqa: E402
+import backend.db  # noqa: E402
+from backend.errors import BizError  # noqa: E402
+from backend.services import ingest, vector_store as vs, embedder as em  # noqa: E402
 
 
 async def _chunk_count_of(doc_id: int) -> int:

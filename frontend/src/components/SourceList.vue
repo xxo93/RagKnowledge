@@ -28,6 +28,10 @@ const orderedSources = computed(() => {
 
 const allExpanded = computed(() => props.sources.length > 0 && expandedIds.value.size === props.sources.length)
 
+// 联网兜底时来源全是网页，标题口径随之切换，避免叫成"引用文档"
+const allWeb = computed(() => props.sources.every((s) => s.source_type === 'web'))
+const headLabel = computed(() => (allWeb.value ? `🌐 联网来源 · ${props.sources.length}` : `📄 引用来源 · ${props.sources.length}`))
+
 function toggleSource(entry) {
   const key = sourceKey(entry.source, entry.index)
   const next = new Set(expandedIds.value)
@@ -64,7 +68,7 @@ defineExpose({ focusSource })
 <template>
   <div ref="rootRef" class="source-list">
     <div class="source-list-head">
-      <span class="source-title">📄 引用来源 · {{ sources.length }}</span>
+      <span class="source-title">{{ headLabel }}</span>
       <el-button link size="small" @click="toggleAll">
         {{ allExpanded ? '全部收起' : '全部展开' }}
       </el-button>

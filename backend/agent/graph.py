@@ -21,11 +21,11 @@ import logging
 import time
 from typing import AsyncIterator, Awaitable, Callable, Optional
 
-from agent.state import AgentState, initial_state
-from agent import decision as decision_mod, dedup, replan
-from agent.tools import search_tool, calc_tool, doc_stats_tool
-from config import settings
-from prompts import NO_RESULT_FALLBACK, RUNNING_LABELS, DONE_LABELS
+from .state import AgentState, initial_state
+from . import decision as decision_mod, dedup, replan
+from .tools import search_tool, calc_tool, doc_stats_tool, biz_query_tool
+from ..config import settings
+from ..prompts import NO_RESULT_FALLBACK, RUNNING_LABELS, DONE_LABELS
 
 logger = logging.getLogger("rag.graph")
 
@@ -52,6 +52,13 @@ def _done_label(tool_name: str, result_count: Optional[int], detail: Optional[di
     detail = detail or {}
     if tool_name == "knowledge_search" and result_count is not None:
         return f"{base} · 命中 {result_count} 条来源"
+    if tool_name == "biz_query":
+        if detail.get("title") and detail.get("rows") is not None:
+            suffix = f" · {detail.get('title')} {detail.get('rows')} 行"
+            if detail.get("truncated"):
+                suffix += f"（共 {detail.get('total')} 行，已截断）"
+            return base + suffix
+        return f"{base} · 未执行"
     if tool_name == "calculator" and detail.get("result") is not None:
         expression = detail.get("expression") or "算式"
         return f"{base}：{expression} = {detail.get('result')}"
@@ -225,6 +232,64 @@ async def doc_stats_node(state: AgentState) -> dict:
     }
 
 
+async def biz_query_node(state: AgentState) -> dict:
+    """执行双业务库查询；权限/参数/合规/脱敏/行数限制均在 services.biz_query 内完成。"""
+    args = (state.get("decision") or {}).get("args") or {}
+    query = args.get("query") or state.get("query", "")
+    tool_name = "biz_query"
+    old_keys = state.get("used_keys") or []
+    key = dedup.call_key(tool_name, {"query": query})
+    if dedup.is_duplicate(old_keys, tool_name, {"query": query}):
+        logger.info("跳过重复工具调用：%s", key)
+        return {"used_keys": old_keys}
+
+    round_no = state.get("round", 0)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "running",
+        "label": RUNNING_LABELS[tool_name], "round": round_no,
+    })
+
+    result = await biz_query_tool.run(query, state.get("user") or {})
+    table = result.get("table") or {}
+    detail = {
+        "intent": result.get("intent"),
+        "title": table.get("title"),
+        "rows": len(table.get("rows") or []) if table else None,
+        "total": table.get("total"),
+        "truncated": table.get("truncated"),
+        "code": result.get("code"),
+    }
+    result_count = detail["rows"]
+    done_label = _done_label(tool_name, result_count, detail)
+    await _emit(state, {
+        "type": "tool", "name": tool_name, "status": "done", "round": round_no,
+        "label": done_label, "result_count": result_count, "ok": bool(result.get("ok")),
+        "error": None if result.get("ok") else result.get("message"),
+        "detail": detail,
+    })
+
+    observation = {
+        "round": round_no,
+        "tool": tool_name,
+        "ok": bool(result.get("ok")),
+        "result": result,
+        "error": None if result.get("ok") else result.get("message"),
+    }
+    tool_call = {
+        "name": tool_name,
+        "label": done_label,
+        "status": "done",
+        "round": round_no,
+        "result_count": result_count,
+        "detail": detail,
+    }
+    return {
+        "observations": (state.get("observations") or []) + [observation],
+        "tool_calls": (state.get("tool_calls") or []) + [tool_call],
+        "used_keys": old_keys + [key],
+    }
+
+
 async def assess_node(state: AgentState) -> dict:
     """每次工具执行后累加轮次；轮次上限由 replan 收敛规则控制。"""
     new_round = state.get("round", 0) + 1
@@ -267,6 +332,15 @@ async def answer_node(state: AgentState) -> dict:
                 parts.append(NO_RESULT_FALLBACK)
             else:
                 parts.append(f"检索失败：{obs.get('error')}")
+        elif tool == "biz_query":
+            if ok:
+                table = result.get("table") or {}
+                parts.append(
+                    f"{table.get('title') or '业务查询'}：共 {table.get('total')} 行"
+                    f"{'（已截断，仅展示前 %d 行）' % len(table.get('rows') or []) if table.get('truncated') else ''}"
+                )
+            else:
+                parts.append(result.get("message") or "业务库查询未执行")
 
     if not parts:
         answer = "你好，我可以帮你检索知识库、做简单四则运算，或统计文档数量，直接告诉我你的问题即可。"
@@ -287,6 +361,8 @@ def route_after_plan(state: AgentState) -> str:
         return "calculator"
     if tool == "doc_stats":
         return "doc_stats"
+    if tool == "biz_query":
+        return "biz_query"
     return "answer"
 
 
@@ -312,6 +388,7 @@ def build_graph():
     g.add_node("knowledge_search", knowledge_search_node)
     g.add_node("calculator", calculator_node)
     g.add_node("doc_stats", doc_stats_node)
+    g.add_node("biz_query", biz_query_node)
     g.add_node("assess", assess_node)
     g.add_node("replan", replan_node)
     g.add_node("answer", answer_node)
@@ -324,12 +401,14 @@ def build_graph():
             "knowledge_search": "knowledge_search",
             "calculator": "calculator",
             "doc_stats": "doc_stats",
+            "biz_query": "biz_query",
             "answer": "answer",
         },
     )
     g.add_edge("knowledge_search", "assess")
     g.add_edge("calculator", "assess")
     g.add_edge("doc_stats", "assess")
+    g.add_edge("biz_query", "assess")
     g.add_edge("assess", "replan")
     g.add_conditional_edges(
         "replan",
@@ -338,6 +417,7 @@ def build_graph():
             "knowledge_search": "knowledge_search",
             "calculator": "calculator",
             "doc_stats": "doc_stats",
+            "biz_query": "biz_query",
             "answer": "answer",
         },
     )
@@ -358,10 +438,11 @@ async def run_once(
     query: str,
     history: list[dict] | None = None,
     on_event: EventSink = None,
+    user: dict | None = None,
 ) -> dict:
     """非流式执行完整状态图，返回最终状态字典；on_event 可选接收工具生命周期事件。"""
     graph = get_graph()
-    return await graph.ainvoke(initial_state(query, history, event_sink=on_event))
+    return await graph.ainvoke(initial_state(query, history, event_sink=on_event, user=user))
 
 
 async def run_stream(

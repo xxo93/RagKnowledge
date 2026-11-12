@@ -1,7 +1,7 @@
 """认证安全工具离线测试：不连接数据库、不发起网络请求。"""
 from __future__ import annotations
 
-from services.security import (
+from backend.services.security import (
     generate_token,
     hash_password,
     hash_token,

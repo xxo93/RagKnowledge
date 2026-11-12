@@ -13,9 +13,9 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from errors import BizError, ERR_PARAM, ERR_USER_NOT_FOUND, ok
-from services import account_store, audit, security
-from services.auth_deps import require_admin
+from ..errors import BizError, ERR_PARAM, ERR_USER_NOT_FOUND, ok
+from ..services import account_store, audit, security
+from ..services.auth_deps import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 

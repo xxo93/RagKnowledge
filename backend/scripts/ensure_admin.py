@@ -25,11 +25,11 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from config import settings  # noqa: E402
-from db import close_pool, init_pool  # noqa: E402
-from services import account_store, security  # noqa: E402
+from backend.config import settings  # noqa: E402
+from backend.db import close_pool, init_pool  # noqa: E402
+from backend.services import account_store, security  # noqa: E402
 
 
 async def main(reset_password: bool) -> int:

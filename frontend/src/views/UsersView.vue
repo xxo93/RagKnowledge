@@ -192,8 +192,8 @@ onMounted(() => refresh(1))
         v-model="keyword"
         size="small"
         clearable
-        placeholder="用户名 / 显示名"
-        aria-label="按用户名或显示名筛选"
+        placeholder="用户名 / 昵称"
+        aria-label="按用户名或昵称筛选"
         class="filter-input"
       />
       <el-select v-model="roleFilter" size="small" aria-label="按角色筛选" class="filter-select">
@@ -227,7 +227,7 @@ onMounted(() => refresh(1))
           <el-tag v-if="isSelf(row)" size="small" type="success" effect="plain" class="self-tag">当前账号</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="display_name" label="显示名" min-width="130" />
+      <el-table-column prop="display_name" label="昵称" min-width="130" />
       <el-table-column label="角色" width="100">
         <template #default="{ row }">
           <el-tag :type="row.role === 'admin' ? 'warning' : 'info'" size="small" effect="plain">
@@ -299,7 +299,7 @@ onMounted(() => refresh(1))
         <el-form-item label="用户名（登录名，2–64 位）">
           <el-input v-model="form.username" placeholder="字母/数字/下划线/点/短横线" clearable />
         </el-form-item>
-        <el-form-item label="显示名（可选）">
+        <el-form-item label="昵称（可选）">
           <el-input v-model="form.display_name" placeholder="留空则与用户名一致" clearable />
         </el-form-item>
         <el-form-item :label="`初始密码（至少 ${PASSWORD_MIN} 位）`">

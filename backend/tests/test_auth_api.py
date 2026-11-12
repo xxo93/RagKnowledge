@@ -15,9 +15,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import main
-from errors import BizError, ERR_SESSION_NOT_FOUND
-from services import account_store
+import backend.main as main
+from backend.errors import BizError, ERR_SESSION_NOT_FOUND
+from backend.services import account_store
 
 PROTECTED_ROUTES = [
     ("get", "/api/auth/me"),
@@ -35,6 +35,7 @@ PROTECTED_ROUTES = [
     ("post", "/api/admin/users"),
     ("patch", "/api/admin/users/2/status"),
     ("post", "/api/admin/users/2/reset-password"),
+    ("patch", "/api/auth/profile"),
 ]
 
 
@@ -117,7 +118,7 @@ def test_member_cannot_read_admin_only_get_endpoints(
 def test_admin_can_read_admin_only_get_endpoints(client: TestClient, monkeypatch) -> None:
     _patch_session(monkeypatch, _user(role="admin"))
 
-    from services import vector_store
+    from backend.services import vector_store
 
     async def fake_list_documents(page, size, keyword=None, status=None):
         return 1, [{"doc_id": 9, "doc_name": "samples/leave_policy.md", "chunk_count": 1}]
@@ -140,7 +141,7 @@ def test_admin_passes_admin_guard(client: TestClient, monkeypatch) -> None:
     async def fake_reindex():
         return {"status": "reindexed"}
 
-    from services import maintenance
+    from backend.services import maintenance
 
     monkeypatch.setattr(maintenance, "rebuild_vector_index", fake_reindex)
     client.cookies.set("rag_session", "dummy-token")
@@ -170,7 +171,7 @@ def test_rename_session_passes_current_user_and_name(client: TestClient, monkeyp
         seen.update(session_id=session_id, user_id=user_id, name=session_name)
         return {"session_id": session_id, "session_name": session_name, "create_time": None}
 
-    from services import chat_store
+    from backend.services import chat_store
 
     monkeypatch.setattr(chat_store, "rename_session", fake_rename)
     client.cookies.set("rag_session", "dummy-token")
@@ -186,7 +187,7 @@ def test_rename_other_users_session_returns_404(client: TestClient, monkeypatch)
     async def fake_rename(session_id, user_id, session_name):
         raise BizError(ERR_SESSION_NOT_FOUND, "会话不存在或无权访问", http_status=404)
 
-    from services import chat_store
+    from backend.services import chat_store
 
     monkeypatch.setattr(chat_store, "rename_session", fake_rename)
     client.cookies.set("rag_session", "dummy-token")
@@ -277,7 +278,7 @@ def test_member_cannot_manage_users(client: TestClient, monkeypatch) -> None:
 # ---------------- 演示账号提示（默认关闭） ----------------
 def test_demo_hint_disabled_when_switch_off(client: TestClient, monkeypatch) -> None:
     """开关关闭时必须完全不泄露；不依赖部署环境 .env 的实际取值。"""
-    from config import settings
+    from backend.config import settings
 
     monkeypatch.setattr(settings, "DEMO_CREDENTIAL_HINT", False)
     resp = client.get("/api/auth/demo-hint")
@@ -286,7 +287,7 @@ def test_demo_hint_disabled_when_switch_off(client: TestClient, monkeypatch) -> 
 
 
 def _patch_demo_credentials(monkeypatch, password_hash: str, role: str = "admin", status: int = 1):
-    from config import settings
+    from backend.config import settings
 
     async def fake_user(username):
         return {"user_id": 1, "username": username, "display_name": "系统管理员",
@@ -301,7 +302,7 @@ def _patch_demo_credentials(monkeypatch, password_hash: str, role: str = "admin"
 
 
 def test_demo_hint_shown_when_enabled_and_credentials_valid(client: TestClient, monkeypatch) -> None:
-    from services import security
+    from backend.services import security
 
     settings = _patch_demo_credentials(
         monkeypatch, security.hash_password("Admin@12345")
@@ -316,7 +317,7 @@ def test_demo_hint_shown_when_enabled_and_credentials_valid(client: TestClient, 
 
 
 def test_demo_hint_hidden_when_password_changed(client: TestClient, monkeypatch) -> None:
-    from services import security
+    from backend.services import security
 
     settings = _patch_demo_credentials(
         monkeypatch, security.hash_password("another-password")
@@ -329,7 +330,7 @@ def test_demo_hint_hidden_when_password_changed(client: TestClient, monkeypatch)
 
 
 def test_demo_hint_hidden_for_disabled_account(client: TestClient, monkeypatch) -> None:
-    from services import security
+    from backend.services import security
 
     settings = _patch_demo_credentials(
         monkeypatch, security.hash_password("Admin@12345"), status=0
@@ -339,3 +340,61 @@ def test_demo_hint_hidden_for_disabled_account(client: TestClient, monkeypatch) 
 
     resp = client.get("/api/auth/demo-hint")
     assert resp.json()["data"] == {"enabled": False}
+
+
+# ---- 昵称（display_name）编辑 ----
+
+def test_update_profile_changes_display_name(client: TestClient, monkeypatch) -> None:
+    """改昵称：去掉首尾空白后落库，并返回最新 profile 供前端即时刷新。"""
+    _patch_session(monkeypatch, _user())
+    seen = {}
+
+    async def fake_update(user_id, name):
+        seen.update(user_id=user_id, name=name)
+        return True
+
+    async def fake_get(user_id):
+        return {**_user(), "display_name": seen.get("name")}
+
+    monkeypatch.setattr(account_store, "update_display_name", fake_update)
+    monkeypatch.setattr(account_store, "get_user_by_id", fake_get)
+    client.cookies.set("rag_session", "dummy-token")
+
+    resp = client.patch("/api/auth/profile", json={"display_name": "  小王  "})
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 0
+    assert seen == {"user_id": 7, "name": "小王"}
+    assert resp.json()["data"]["display_name"] == "小王"
+
+
+def test_update_profile_rejects_blank(client: TestClient, monkeypatch) -> None:
+    _patch_session(monkeypatch, _user())
+    client.cookies.set("rag_session", "dummy-token")
+    resp = client.patch("/api/auth/profile", json={"display_name": "   "})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 40001
+
+
+def test_update_profile_rejects_too_long(client: TestClient, monkeypatch) -> None:
+    _patch_session(monkeypatch, _user())
+    client.cookies.set("rag_session", "dummy-token")
+    resp = client.patch("/api/auth/profile", json={"display_name": "名" * 33})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 40001
+
+
+def test_update_profile_same_name_is_noop(client: TestClient, monkeypatch) -> None:
+    _patch_session(monkeypatch, _user())
+    called = {"n": 0}
+
+    async def fake_update(user_id, name):
+        called["n"] += 1
+        return True
+
+    monkeypatch.setattr(account_store, "update_display_name", fake_update)
+    client.cookies.set("rag_session", "dummy-token")
+
+    resp = client.patch("/api/auth/profile", json={"display_name": "测试用户"})
+    assert resp.status_code == 200
+    assert called["n"] == 0
+    assert resp.json()["data"]["display_name"] == "测试用户"

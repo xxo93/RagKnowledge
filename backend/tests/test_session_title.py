@@ -1,5 +1,5 @@
 """会话首问标题提炼纯函数离线测试（零网络、零数据库）。"""
-from services import session_title
+from backend.services import session_title
 
 
 def test_strips_punctuation_and_trailing_particles():

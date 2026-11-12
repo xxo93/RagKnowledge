@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from services import rag
+from ...services import rag
 
 logger = logging.getLogger("rag.tool.search")
 

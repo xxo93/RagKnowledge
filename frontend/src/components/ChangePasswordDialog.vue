@@ -67,7 +67,7 @@ async function onSubmit() {
   <el-dialog
     :model-value="visible"
     title="修改密码"
-    width="420px"
+    width="min(420px, 92vw)"
     :close-on-click-modal="false"
     @update:model-value="close"
   >

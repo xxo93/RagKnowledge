@@ -77,9 +77,9 @@ DEMO_CREDENTIAL_HINT=false              # 是否在登录页显示上面这组�
 - 已有环境想“找回/重置”这个超级账号，执行：
 
   ```powershell
-  cd backend
-  python scripts\ensure_admin.py                    # 缺则创建；已存在则不改密码
-  python scripts\ensure_admin.py --reset-password   # 强制重置为配置密码并吊销其登录态
+  # 工作目录 = 仓库根
+  python backend\scripts\ensure_admin.py                    # 缺则创建；已存在则不改密码
+  python backend\scripts\ensure_admin.py --reset-password   # 强制重置为配置密码并吊销其登录态
   ```
 
 - 登录后请到右上角「修改密码」改掉默认密码；生产部署请用环境变量覆盖默认值。
@@ -101,14 +101,14 @@ docker run -d --name pgvector -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rag_a
 **后端**
 
 ```powershell
-cd backend
+# 在仓库根目录 D:\code\code_git\RagKnowledge 下执行
 python -m venv .venv ; .venv\Scripts\activate
-python -m pip install -r requirements.txt
-copy ..\.env.example ..\.env         # 填入 DB_DSN、LLM_API_KEY、EMBEDDING_API_KEY、EMBEDDING_DIM
-python scripts\create_database.py    # 幂等建 rag_agent 库（本机 PG；Docker 方式可跳过）
-python scripts\init_db.py            # 幂等建扩展/表/HNSW 索引并回读校验（vector(1024)）
-python scripts\migrate_auth_multitenant.py   # 建认证/审计表、会话归属，并创建默认管理员
-python scripts\ensure_admin.py       # 可选：确认超级账号存在/打印当前配置
+python -m pip install -r backend\requirements.txt
+copy .env.example .env               # 填入 DB_DSN、LLM_API_KEY、EMBEDDING_API_KEY、EMBEDDING_DIM
+python backend\scripts\create_database.py    # 幂等建 rag_agent 库（本机 PG；Docker 方式可跳过）
+python backend\scripts\init_db.py            # 幂等建扩展/表/HNSW 索引并回读校验（vector(1024)）
+python backend\scripts\migrate_auth_multitenant.py   # 建认证/审计表、会话归属，并创建默认管理员
+python backend\scripts\ensure_admin.py       # 可选：确认超级账号存在/打印当前配置
 ```
 
 **前端**
@@ -122,8 +122,8 @@ npm install
 
 ```powershell
 # 终端 1：后端（Windows 必须用 run_dev.py，裸 uvicorn 会因 Proactor 事件循环连不上库）
-cd backend
-..\.venv\Scripts\python.exe scripts\run_dev.py      # http://127.0.0.1:8000
+# 工作目录 = 仓库根；包化后入口为 backend.main:app
+.venv\Scripts\python.exe backend\scripts\run_dev.py      # http://127.0.0.1:8000
 
 # 终端 2：前端（Vite 代理 /api -> 8000）
 cd frontend
@@ -162,8 +162,8 @@ npm run dev                                          # http://127.0.0.1:5173
 | 现象 | 原因与处理 |
 | --- | --- |
 | 5173 打开报 `ECONNREFUSED` / 接口 500 | 后端没起；先确认 `http://127.0.0.1:8000/health` 返回 200 |
-| 后端报 `ProactorEventLoop` 相关错误 | 用了裸 `uvicorn`；改用 `python scripts\run_dev.py` |
-| 登录提示“用户名或密码错误” | 密码被改过；执行 `python scripts\ensure_admin.py --reset-password` |
+| 后端报 `ProactorEventLoop` 相关错误 | 用了裸 `uvicorn`；改用 `python backend\scripts\run_dev.py`（仓库根执行） |
+| 登录提示“用户名或密码错误” | 密码被改过；执行 `python backend\scripts\ensure_admin.py --reset-password` |
 | 页面一直停在登录页 | Cookie 未生效：确认从 `5173` 访问（经 Vite 代理同源），不要直接用 `8000` 打开页面 |
 | 全部接口 401 | 登录态过期或被吊销（改密/重置/禁用都会吊销）；重新登录 |
 | 普通用户看不到管理菜单 | 预期行为；后端也会对越权请求返回 `40303` |
@@ -202,11 +202,11 @@ npm run dev                                          # http://127.0.0.1:5173
 # 一键本地离线回归（后端 pytest + check_env + compileall；加 -Frontend 追加 npm ci 与 vite build）
 powershell -ExecutionPolicy Bypass -File backend\scripts\offline_regression.ps1
 
-cd backend
-python -m pytest tests -q                  # 纯函数/解析/防重复/心跳/再规划/鉴权 API 单测（基线 77 passed）
-python scripts\check_env.py                 # 依赖与内部模块导入、FastAPI 装配、路由注册（不连库不调模型）
-python -m compileall -q .                   # 静态字节编译，只编译不执行、不联网
-cd ..\frontend
+# 工作目录 = 仓库根（pytest 需从根收集 backend.tests 包）
+python -m pytest backend/tests -q          # 纯函数/解析/防重复/心跳/再规划/鉴权 API 单测
+python backend\scripts\check_env.py        # 依赖与内部模块导入、FastAPI 装配、路由注册（不连库不调模型）
+python -m compileall -q backend            # 静态字节编译，只编译不执行、不联网
+cd frontend
 npm run build                              # 前端生产构建（验证无编译错误）
 ```
 
@@ -215,20 +215,22 @@ npm run build                              # 前端生产构建（验证无编�
 **联网（按需执行，会产生少量 Embedding / Rerank / LLM 调用费用）**：
 
 ```powershell
-cd backend
-python scripts\check_rerank.py             # 真实 gte-rerank-v2 排序 + 坏端点降级探针
-python scripts\assess_retrieval.py         # 召回基线评测（Hit@K/MRR；复用已入库样料，仍会调 embedding/rerank）
-python scripts\score_distribution.py       # 只读向量余弦分数分布（不写库、不调 LLM；需先有入库向量）
-python scripts\check_docx_pdf_ingest.py     # DOCX/PDF 真实 embedding 入库 + 向量命中验证，脚本内关 rerank、测完自动清理复原基线
-python scripts\check_replan_live.py          # 动态多轮再规划门控轻测：默认离线零费用不触网；置 $env:REPLAN_LIVE="1" 才发起 1 次真实再决策、不写库
-python scripts\assess_rerank_gain.py         # B档 Rerank 增益复评：内嵌10篇测试语料真实入库，OFF纯向量/ON重排双模式对比指标，自动清理复原基线、不改生产阈值
-python scripts\check_maintenance.py          # C档运维能力：临时文档重解析事务替换切片 + HNSW REINDEX 验证；自动删除临时 DB 记录与本地文件，不重嵌入留存样料
+# 工作目录 = 仓库根
+python backend\scripts\check_rerank.py             # 真实 gte-rerank-v2 排序 + 坏端点降级探针
+python backend\scripts\assess_retrieval.py         # 召回基线评测（Hit@K/MRR；复用已入库样料，仍会调 embedding/rerank）
+python backend\scripts\score_distribution.py       # 只读向量余弦分数分布（不写库、不调 LLM；需先有入库向量）
+python backend\scripts\check_docx_pdf_ingest.py     # DOCX/PDF 真实 embedding 入库 + 向量命中验证，脚本内关 rerank、测完自动清理复原基线
+python backend\scripts\check_replan_live.py          # 动态多轮再规划门控轻测：默认离线零费用不触网；置 $env:REPLAN_LIVE="1" 才发起 1 次真实再决策、不写库
+python backend\scripts\assess_rerank_gain.py         # B档 Rerank 增益复评：内嵌10篇测试语料真实入库，OFF纯向量/ON重排双模式对比指标，自动清理复原基线、不改生产阈值
+python backend\scripts\check_maintenance.py          # C档运维能力：临时文档重解析事务替换切片 + HNSW REINDEX 验证；自动删除临时 DB 记录与本地文件，不重嵌入留存样料
 ```
 
 > 轻量离线 CI 位于 `.github/workflows/ci.yml`：`backend-offline`（pytest + check_env + compileall）与 `frontend-build`（npm ci + vite build）；触发于 push/PR 到 main，刻意不纳入数据库、密钥与联网评测脚本，也不做部署发布；本地等价步骤由 `offline_regression.ps1` 覆盖。
 
 > Agent 多轮：图链路为 工具 → assess → replan →（工具 | answer）。`MULTI_ROUND_ENABLED` 控制是否允许再决策回跳（默认 True；`LLM_REPLAN_ENABLED=False` 时 `plan_next` 恒收敛、行为与单轮一致、零额外 LLM 调用）；`LLM_REPLAN_ENABLED` 默认 False，置 True 后由 `replan_node` 调 LLM 产出带新 `args` 的决策、写回 `state.decision` 并回跳对应工具（开启会增加 LLM 决策调用）；轮次受 `MAX_TOOL_ROUNDS=3` 上限、最近工具失败不重试、`dedup` 重复键三重兜底；前端工具标签在第二轮及以上显示“· 第N轮”、首轮不显示；真实再决策门控轻测见 `scripts/check_replan_live.py`（默认离线零费用、`REPLAN_LIVE=1` 单次联网、不写库）。
 
-> 启动顺序：先 PostgreSQL（`127.0.0.1:5432/rag_agent`）→ `python scripts\run_dev.py`（后端 8000）→ `npm run dev`（前端 5173，Vite 代理 `/api`→8000）。Windows 下后端勿裸 `uvicorn main:app`：Proactor 事件循环会导致 psycopg 异步连接异常，须经 `run_dev.py` 选择器循环启动。
+> 启动顺序：先 PostgreSQL（`127.0.0.1:5432/rag_agent`）→ `python backend\scripts\run_dev.py`（仓库根执行，后端 8000）→ `npm run dev`（前端 5173，Vite 代理 `/api`→8000）。Windows 下后端勿裸 `uvicorn main:app`：Proactor 事件循环会导致 psycopg 异步连接异常，须经 `run_dev.py` 选择器循环启动。
+>
+> 导入约定：`backend/` 已包化（入口 `backend.main:app`，仓库根在 `sys.path`）。包内部各模块统一用相对导入（`backend/x.py` → `from .config import …`；`backend/routers/x.py` → `from ..services import …`；`backend/agent/tools/x.py` → `from ...services import …`）；`backend/scripts/*`、`backend/tests/*` 作为独立入口无法相对导入，统一用 `backend.<x>` 绝对包名。因此 pytest 必须**在仓库根**执行 `python -m pytest backend/tests -q`。
 >
 > 数据边界：当前留存 4 篇样料（document/chunk=4/4）与 1 个 `admin` 账号；测试产生的会话/记录/临时账号/审计行应在用完后删除，权威计数保持 `session/record=0`。

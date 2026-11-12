@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from services import stream_heartbeat as sh
+from backend.services import stream_heartbeat as sh
 
 
 async def _collect(gen, interval: float):

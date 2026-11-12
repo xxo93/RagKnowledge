@@ -16,11 +16,11 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from config import ROOT_DIR  # noqa: E402
-from services import ingest, maintenance, vector_store as vs  # noqa: E402
+import backend.db  # noqa: E402
+from backend.config import ROOT_DIR  # noqa: E402
+from backend.services import ingest, maintenance, vector_store as vs  # noqa: E402
 
 TEMP_NAME = "maint_temp.md"
 TEMP_TEXT = (

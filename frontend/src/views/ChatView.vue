@@ -237,8 +237,16 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* 高度完全交给外层（.app-main.chat-mode 已锁死剩余高度）：
+   对话区内部滚动，输入框固定贴在底部，不再随消息变长把输入框推出首屏。 */
 .chat-layout {
-  height: calc(100vh - 180px);
+  height: 100%;
+  margin: 0;
+}
+
+/* el-col 是子组件，scoped 需要 :deep 才能命中 */
+.chat-layout :deep(.el-col) {
+  height: 100%;
 }
 
 .chat-panel {
@@ -246,12 +254,15 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   background: var(--panel);
   border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
 .msg-list {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0; /* flex 子项必须允许收缩，否则消息多了会把输入框顶出去 */
   overflow-y: auto;
   padding: 16px;
 }
@@ -298,9 +309,9 @@ onMounted(async () => {
 }
 
 @media (max-width: 992px) {
+  /* 窄屏同样保持固定布局：不再改成 auto，否则输入框会被消息流推出首屏 */
   .chat-layout {
-    height: auto;
-    min-height: calc(100vh - 180px);
+    height: 100%;
   }
 
   .desktop-sessions {
@@ -310,23 +321,11 @@ onMounted(async () => {
   .session-drawer-button {
     display: inline-flex;
   }
-
-  .chat-panel {
-    min-height: 420px;
-  }
 }
 
 @media (max-width: 768px) {
-  .chat-layout {
-    min-height: calc(100vh - 220px);
-  }
-
   .msg-list {
     padding: 10px;
-  }
-
-  .chat-panel {
-    min-height: 360px;
   }
 }
 </style>

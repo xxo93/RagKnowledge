@@ -18,10 +18,10 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from services import ingest, rag, vector_store as vs  # noqa: E402
+import backend.db  # noqa: E402
+from backend.services import ingest, rag, vector_store as vs  # noqa: E402
 
 # 两篇主题刻意不重叠：A=年假请假，B=考勤补卡/旷工
 DOC_A = (

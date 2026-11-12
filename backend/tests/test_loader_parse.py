@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from services import loader, ingest
-from errors import BizError, ERR_FILE_TYPE, ERR_INGEST_FAILED
+from backend.services import loader, ingest
+from backend.errors import BizError, ERR_FILE_TYPE, ERR_INGEST_FAILED
 
 
 def test_md_utf8_extract(tmp_path):

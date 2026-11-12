@@ -12,9 +12,9 @@ from pathlib import Path
 
 from fastapi.concurrency import run_in_threadpool
 
-from config import ROOT_DIR, settings
-from errors import BizError, ERR_DOC_NOT_FOUND, ERR_INGEST_FAILED
-from services import cleaner, embedder as embed_mod, loader, splitter, vector_store as vs
+from ..config import ROOT_DIR, settings
+from ..errors import BizError, ERR_DOC_NOT_FOUND, ERR_INGEST_FAILED
+from . import cleaner, embedder as embed_mod, loader, splitter, vector_store as vs
 
 
 def _build_rows_sync(abs_path: Path) -> tuple[list[dict], int]:

@@ -17,9 +17,9 @@ from pathlib import Path
 
 from fastapi.concurrency import run_in_threadpool
 
-from config import settings
-from errors import BizError, ERR_INGEST_FAILED
-from services import loader, cleaner, splitter, embedder as embed_mod, vector_store as vs
+from ..config import settings
+from ..errors import BizError, ERR_INGEST_FAILED
+from . import loader, cleaner, splitter, embedder as embed_mod, vector_store as vs
 
 logger = logging.getLogger("rag.ingest")
 

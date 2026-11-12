@@ -1,6 +1,6 @@
 """来源富字段组装纯函数离线测试（不连接向量库）。"""
-from config import settings
-from services.rag import _doc_title, _summary, _source_fields
+from backend.config import settings
+from backend.services.rag import _doc_title, _summary, _source_fields
 
 
 def test_doc_title_removes_extension_and_underscore():

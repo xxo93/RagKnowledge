@@ -1,6 +1,6 @@
 <script setup>
 // 知识库管理页：批量上传（大文件自动分块）、文档列表、删除、重解析与索引重建
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FileUploader from '../components/FileUploader.vue'
 import DocTable from '../components/DocTable.vue'
@@ -23,6 +23,15 @@ function readStoredNumber(key, fallback) {
     return Number.isFinite(raw) && raw > 0 ? raw : fallback
   } catch (_) {
     return fallback
+  }
+}
+
+/** 本地是否存过该选择；没存过才跟随服务端默认值（存过说明用户自己选过，不能被覆盖）。 */
+function hasStored(key) {
+  try {
+    return localStorage.getItem(key) !== null
+  } catch (_) {
+    return false
   }
 }
 
@@ -49,9 +58,12 @@ const loadError = ref(false)
 const uploadReport = ref(null)
 const uploadProgress = ref('')
 
-// 分块大小（MB）与并发数由用户自选，并记住选择；实际可用范围以服务端返回的上限为准
+// 分块大小（MB）与并发数：优先用用户上次的选择（localStorage），
+// 没有选择过则采用配置中心下发的默认值（UPLOAD_DEFAULT_CHUNK_MB / UPLOAD_DEFAULT_CONCURRENCY）。
 const chunkMb = ref(readStoredNumber(STORAGE_CHUNK_MB, 4))
 const concurrency = ref(readStoredNumber(STORAGE_CONCURRENCY, 3))
+// 程序化套用服务端默认值时不要写 localStorage，否则"没选过"会被误判成"选过"
+const applyingDefaults = ref(false)
 
 const uploadLimits = computed(() => ({
   singleMb: sysInfo.value?.upload_max_mb ?? 10,
@@ -59,20 +71,43 @@ const uploadLimits = computed(() => ({
   chunkMaxMb: sysInfo.value?.upload_chunk_max_mb ?? 32
 }))
 
-// 分块大小候选：按服务端单片上限过滤，避免选到会被后端拒绝的值
+// 分块大小候选：按服务端单片上限过滤；若默认值不在候选表里则补进去
 const chunkOptions = computed(() => {
   const cap = uploadLimits.value.chunkMaxMb
-  return [1, 2, 4, 8, 16, 32].filter((mb) => mb <= cap)
+  const base = [1, 2, 4, 8, 16, 32].filter((mb) => mb <= cap)
+  const current = chunkMb.value
+  return base.includes(current) ? base : [...base, current].sort((a, b) => a - b)
 })
 
-watch(chunkMb, (v) => writeStored(STORAGE_CHUNK_MB, v))
-watch(concurrency, (v) => writeStored(STORAGE_CONCURRENCY, v))
+watch(chunkMb, (v) => {
+  if (!applyingDefaults.value) writeStored(STORAGE_CHUNK_MB, v)
+})
+watch(concurrency, (v) => {
+  if (!applyingDefaults.value) writeStored(STORAGE_CONCURRENCY, v)
+})
+
+/** 用服务端默认值初始化"用户还没选过"的项（配置中心改了默认值，刷新页面即生效）。 */
+function applyServerDefaults(info) {
+  if (!info) return
+  const patchChunk =
+    !hasStored(STORAGE_CHUNK_MB) && Number.isFinite(Number(info.upload_default_chunk_mb))
+  const patchConcurrency =
+    !hasStored(STORAGE_CONCURRENCY) && Number.isFinite(Number(info.upload_default_concurrency))
+  if (!patchChunk && !patchConcurrency) return
+  applyingDefaults.value = true
+  if (patchChunk) chunkMb.value = Number(info.upload_default_chunk_mb)
+  if (patchConcurrency) concurrency.value = Number(info.upload_default_concurrency)
+  nextTick(() => {
+    applyingDefaults.value = false
+  })
+}
 
 // 服务端上限变化时纠正越界的本地配置
 watch(uploadLimits, (limits) => {
   const cap = limits.chunkMaxMb
   if (chunkMb.value > cap) chunkMb.value = cap
   if (concurrency.value > 6) concurrency.value = 6
+  if (concurrency.value < 1) concurrency.value = 1
 })
 
 function currentFilters() {
@@ -231,6 +266,7 @@ function onPageChange(p) {
 onMounted(async () => {
   try {
     sysInfo.value = await fetchSystemInfo()
+    applyServerDefaults(sysInfo.value)
   } catch (_) {
     sysInfo.value = null
   }

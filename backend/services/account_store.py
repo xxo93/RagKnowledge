@@ -11,8 +11,8 @@ from typing import Optional
 
 import psycopg
 
-from db import get_pool
-from errors import BizError, ERR_USER_EXISTS
+from ..db import get_pool
+from ..errors import BizError, ERR_USER_EXISTS
 
 logger = logging.getLogger("rag.account_store")
 
@@ -173,6 +173,19 @@ async def update_password(user_id: int, password_hash: str) -> None:
                     "UPDATE app_user SET password_hash = %(hash)s WHERE user_id = %(id)s",
                     {"hash": password_hash, "id": int(user_id)},
                 )
+
+
+async def update_display_name(user_id: int, display_name: str) -> bool:
+    """改本人昵称；返回是否真的改到一行（用户不存在/已删除时为 False）。"""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE app_user SET display_name = %(name)s WHERE user_id = %(id)s",
+                    {"name": display_name, "id": int(user_id)},
+                )
+                return cur.rowcount > 0
 
 
 async def touch_last_login(user_id: int) -> None:

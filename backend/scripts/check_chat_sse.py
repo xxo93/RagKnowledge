@@ -27,17 +27,17 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # 先于业务导入：默认关闭 LLM 首选决策，保持离线确定性；REAL_LLM=1 时开启
-from config import settings  # noqa: E402
+from backend.config import settings  # noqa: E402
 
 settings.LLM_PLAN_ENABLED = os.environ.get("REAL_LLM") == "1"
 
-import db  # noqa: E402
-from services import account_store, chat_store, memory, rag as rag_svc  # noqa: E402
-import agent.graph as graph  # noqa: E402
-import llm as llm_mod  # noqa: E402
+import backend.db  # noqa: E402
+from backend.services import account_store, chat_store, memory, rag as rag_svc  # noqa: E402
+import backend.agent.graph as graph  # noqa: E402
+import backend.llm as llm_mod  # noqa: E402
 
 results: list[tuple[str, bool]] = []
 
@@ -161,7 +161,7 @@ async def main() -> int:
           "参考" in joined and len(joined) > 0, f"chars={len(joined)}")
 
     # ---------------- E. SSE 帧格式（对齐前端 sse.js） ----------------
-    from routers.chat import _frame  # noqa: E402
+    from backend.routers.chat import _frame  # noqa: E402
 
     f = _frame("token", {"text": "你好"})
     check("E1 SSE 帧 = event 行 + data JSON 行 + 空行结束",

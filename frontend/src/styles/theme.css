@@ -63,7 +63,16 @@
   border: 0;
 }
 
+/* 整页高度由根节点撑满：对话页靠这个把输入框钉在视口底部，
+   body 默认的 8px margin 会额外顶出 16px 整页滚动，必须清掉 */
+html,
+body,
+#app {
+  height: 100%;
+}
+
 body {
+  margin: 0;
   background: var(--bg);
   color: var(--text);
 }

@@ -21,20 +21,37 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from errors import BizError, ok, ERR_SESSION_NOT_FOUND
-from schemas.chat import ChatStreamRequest
-from services import chat_store, memory, rag as rag_svc, stream_heartbeat, session_title as session_title_svc
-from services import vector_store as vs
-from services.auth_deps import get_current_user
-from agent import graph
-from prompts import NO_RESULT_FALLBACK
-from config import settings
+from ..errors import BizError, ok, ERR_SESSION_NOT_FOUND
+from ..schemas.chat import ChatStreamRequest
+from ..services import chat_store, memory, rag as rag_svc, stream_heartbeat, session_title as session_title_svc
+from ..services import app_config, web_search as web_search_svc
+from ..services import vector_store as vs
+from ..services.auth_deps import get_current_user
+from ..agent import graph
+from ..agent.tools import search_tool
+from ..prompts import (
+    NO_RESULT_FALLBACK,
+    NOTICE_WEB_USED,
+    NOTICE_WEB_UNAVAILABLE,
+    LLM_UNAVAILABLE_MSG,
+)
+from ..config import settings
 
 logger = logging.getLogger("rag.router.chat")
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 _SSE_MEDIA = "text/event-stream; charset=utf-8"
+
+# answer_mode 取值：前端据此标注"是否用到内部知识库能力"
+MODE_KNOWLEDGE = "knowledge"          # 内部知识库正常作答
+MODE_WEB = "web"                      # 联网兜底（明确标注非内部能力）
+MODE_GUIDE = "fallback_guide"         # 引导补充描述
+MODE_CONTACT = "fallback_contact"     # 提示联系管理员
+MODE_TOOL = "tool"                    # 计算器 / 文档统计
+MODE_BIZ = "biz_query"                # 业务库查询（结构化表格）
+MODE_CHAT = "chat"                    # 寒暄，无工具
+
 
 
 def _frame(event: str, data: dict) -> str:
@@ -50,12 +67,73 @@ def _find_hits(final: dict) -> list[dict]:
     return []
 
 
+def _find_biz_result(final: dict) -> dict:
+    """取最近一次 biz_query 工具结果（含 table / 错误码）。"""
+    for obs in reversed(final.get("observations") or []):
+        if obs.get("tool") == "biz_query":
+            return obs.get("result") or {}
+    return {}
+
+
 def _display_doc_name(name: str) -> str:
     """从文件名派生展示标题；仅去后缀与分隔符，不读取文档正文。"""
     cleaned = re.sub(r"\.[A-Za-z0-9]+$", "", (name or "").strip())
     cleaned = re.sub(r"[_\-]+", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+async def _fallback_plan(query: str, history: list[dict]) -> dict:
+    """内部知识不足时的兜底决策（不含流式生成）。
+
+    返回：answer_mode / notice / sources / text / web_items
+    规则（需求文档 §3.2）：
+    1. mode=web 且联网可用 → 真联网，answer_mode=web，附"非内部能力"提示条；
+    2. 联网失败（未配置/关闭/超时/HTTP 错误/空结果）**无论配置哪种模式**都回落 contact_admin，
+       并带 WEB_SEARCH_UNAVAILABLE 提示；
+    3. mode=guide / contact_admin → 直接返回可编辑话术，不调模型、不联网。
+    """
+    mode = str(await app_config.get_value("FALLBACK_MODE"))
+    guide_text = str(await app_config.get_value("FALLBACK_TEXT_GUIDE"))
+    contact_text = str(await app_config.get_value("FALLBACK_TEXT_CONTACT"))
+
+    if mode == "guide":
+        return {"answer_mode": MODE_GUIDE, "notice": None, "sources": [],
+                "text": guide_text, "web_items": []}
+
+    if mode != "web":
+        return {"answer_mode": MODE_CONTACT, "notice": None, "sources": [],
+                "text": contact_text, "web_items": []}
+
+    if not bool(await app_config.get_value("WEB_SEARCH_ENABLED")):
+        return {
+            "answer_mode": MODE_CONTACT,
+            "notice": {"code": "WEB_SEARCH_UNAVAILABLE", "level": "warning",
+                       "msg": NOTICE_WEB_UNAVAILABLE.format(reason="管理员关闭了联网检索")},
+            "sources": [], "text": contact_text, "web_items": [],
+        }
+
+    result = await web_search_svc.ask(query)
+    if not result.ok:
+        reason = web_search_svc.describe_failure(result.error_code)
+        logger.info("联网兜底不可用（%s），回落联系管理员话术", result.error_code)
+        return {
+            "answer_mode": MODE_CONTACT,
+            "notice": {"code": "WEB_SEARCH_UNAVAILABLE", "level": "warning",
+                       "msg": NOTICE_WEB_UNAVAILABLE.format(reason=reason)},
+            "sources": [], "text": contact_text, "web_items": [],
+        }
+
+    return {
+        "answer_mode": MODE_WEB,
+        "notice": {"code": "WEB_SEARCH_USED", "level": "info", "msg": NOTICE_WEB_USED},
+        "sources": rag_svc.web_sources(result.items),
+        # 百炼这类"搜索+生成一次完成"的供应商直接给 grounded 答案，不再二次生成；
+        # 其他供应商 answer 为空，交给 stream_web_answer 基于片段生成
+        "text": result.answer or "",
+        "web_items": [] if result.answer else result.items,
+    }
+
 
 
 @router.get("/suggestions")
@@ -91,7 +169,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
     async def _prepare():
         """前置阶段：加载历史并执行 Agent 决策、检索与重排；独立任务便于静默期发送心跳。"""
         history = await memory.load_recent(body.session_id)
-        final = await graph.run_once(body.query, history, on_event=_sink)
+        final = await graph.run_once(body.query, history, on_event=_sink, user=user)
         decision = (final.get("decision") or {}).get("tool")
         sources = final.get("sources") or []
         return history, final, sources, decision
@@ -123,20 +201,19 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
             async for frame in _drain_tool_events():
                 yield frame
 
-            # 来源事件先于答案文本发送，前端可先渲染来源卡片
-            if sources:
-                yield _frame("source", {"sources": sources})
+            answer_mode = MODE_CHAT
+            notice: dict | None = None
+            table_for_record: dict | None = None
 
-            # 3) token 事件：按决策工具选择生成路径
-            if decision in ("calculator", "doc_stats"):
-                text = (final.get("answer") or "").strip()
-                if text:
-                    token_parts.append(text)
-                    yield _frame("token", {"text": text})
-            elif decision == "knowledge_search":
-                hits = _find_hits(final)
-                if sources and hits:
-                    # token 静默期发送心跳；底层生成器不因本次超时等待被取消
+            async def _knowledge_frames(hits: list[dict], kb_sources: list[dict]):
+                """知识库路径：命中足够走 RAG，否则按配置兜底；调用方负责收集 token_parts。"""
+                nonlocal answer_mode, notice, sources
+                min_hits = int(await app_config.get_value("FALLBACK_MIN_HITS"))
+                if hits and len(hits) >= min_hits:
+                    answer_mode = MODE_KNOWLEDGE
+                    sources = kb_sources
+                    if sources:
+                        yield _frame("source", {"sources": sources})
                     async for item in stream_heartbeat.aiter_with_heartbeat(
                         rag_svc.stream_answer(hits, body.query, history),
                         settings.SSE_HEARTBEAT_SEC,
@@ -146,13 +223,89 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                             continue
                         token_parts.append(item)
                         yield _frame("token", {"text": item})
+                    return
+
+                plan = await _fallback_plan(body.query, history)
+                answer_mode = plan["answer_mode"]
+                notice = plan["notice"]
+                sources = plan["sources"]
+                if notice:
+                    yield _frame("notice", notice)
+                if sources:
+                    yield _frame("source", {"sources": sources})
+                if plan["web_items"]:
+                    async for item in stream_heartbeat.aiter_with_heartbeat(
+                        rag_svc.stream_web_answer(plan["web_items"], body.query, history),
+                        settings.SSE_HEARTBEAT_SEC,
+                    ):
+                        if item is stream_heartbeat.HEARTBEAT_SENTINEL:
+                            yield ": ping\n\n"
+                            continue
+                        token_parts.append(item)
+                        yield _frame("token", {"text": item})
                 else:
-                    token_parts.append(NO_RESULT_FALLBACK)
-                    yield _frame("token", {"text": NO_RESULT_FALLBACK})
+                    text = plan["text"] or NO_RESULT_FALLBACK
+                    token_parts.append(text)
+                    yield _frame("token", {"text": text})
+
+            # 3) 按决策工具选择生成路径；来源帧随分支发送（联网兜底的来源是联网结果）
+            if decision in ("calculator", "doc_stats"):
+                answer_mode = MODE_TOOL
+                text = (final.get("answer") or "").strip()
+                if text:
+                    token_parts.append(text)
+                    yield _frame("token", {"text": text})
+            elif decision == "biz_query":
+                biz = _find_biz_result(final)
+                if biz.get("ok") and biz.get("table"):
+                    table = biz["table"]
+                    answer_mode = MODE_BIZ
+                    table_for_record = table
+                    yield _frame("table", table)
+                    summary = f"已按「{table.get('title')}」查询业务库，共 {table.get('total')} 行"
+                    if table.get("download_url"):
+                        ttl = table.get("download_ttl_minutes") or 0
+                        summary += (
+                            f"，超过内联上限 {table.get('inline_max')} 行，仅展示前 {len(table.get('rows') or [])} 行；"
+                            f"完整结果已脱敏导出为 CSV（{table.get('download_rows')} 行），"
+                        )
+                        summary += (
+                            f"下载链接 {ttl} 分钟内有效，过期前可重复下载" if ttl > 0 else "下载链接长期有效，可重复下载"
+                        )
+                        if table.get("hard_truncated"):
+                            summary += "（结果超过硬上限，超出部分未包含）"
+                    elif table.get("truncated"):
+                        summary += (
+                            f"，超过内联上限 {table.get('inline_max')} 行，"
+                            f"本次仅展示前 {len(table.get('rows') or [])} 行；导出暂不可用，请联系管理员"
+                        )
+                    else:
+                        summary += "，敏感字段已在服务端脱敏，明细见下表"
+                    summary += "。"
+                    token_parts.append(summary)
+                    yield _frame("token", {"text": summary})
+                elif biz.get("code") == "BIZ_NO_INTENT":
+                    # 业务库没有对应意图：回落知识库检索，避免"订单流程"这类文档问题被误判
+                    result = await search_tool.run(body.query)
+                    async for frame in _knowledge_frames(
+                        (result or {}).get("hits") or [], (result or {}).get("sources") or []
+                    ):
+                        yield frame
+                else:
+                    answer_mode = MODE_CHAT
+                    text = (biz.get("message") or "业务库查询未执行，请补充查询对象或联系管理员。").strip()
+                    token_parts.append(text)
+                    yield _frame("token", {"text": text})
+            elif decision == "knowledge_search":
+                async for frame in _knowledge_frames(
+                    _find_hits(final), final.get("sources") or []
+                ):
+                    yield frame
             else:
-                # tool=None（寒暄/无需工具）：确定性引导文案，不暴露内部实现细节
+                # tool=None（寒暄/无需工具）：确定性引导文案，不触发联网兜底
                 text = (final.get("answer") or "").strip() or (
-                    "你好，我可以帮你检索知识库、做简单四则运算，或统计文档数量，直接告诉我你的问题即可。"
+                    "你好，我可以帮你检索知识库、做简单四则运算、统计文档数量，"
+                    "或查询业务库（客户/订单/库存/员工考勤/薪资），直接告诉我你的问题即可。"
                 )
                 token_parts.append(text)
                 yield _frame("token", {"text": text})
@@ -166,6 +319,8 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                     answer_text,
                     tool_call_info=final.get("tool_calls"),
                     source_ref=sources,
+                    answer_mode=answer_mode,
+                    table_payload=table_for_record,
                 )
             except Exception:  # noqa: BLE001 - 落库失败不影响本次已流出结果
                 logger.warning("对话记录落库失败（不影响本次流式结果）", exc_info=True)
@@ -195,6 +350,7 @@ async def chat_stream(body: ChatStreamRequest, user: dict = Depends(get_current_
                 "session_id": body.session_id,
                 "session_title": auto_title,
                 "source_count": source_count,
+                "answer_mode": answer_mode,
                 "elapsed_ms": elapsed_ms,
             })
         except asyncio.CancelledError:

@@ -11,8 +11,8 @@ import json
 import logging
 import re
 
-from prompts import CALC_EXPR_PATTERN, DOC_STATS_KEYWORDS
-from config import settings
+from ..prompts import CALC_EXPR_PATTERN, DOC_STATS_KEYWORDS
+from ..config import settings
 
 logger = logging.getLogger("rag.agent.decision")
 
@@ -21,6 +21,13 @@ _STAT_HINTS = (
     ("failed_docs", ("失败", "失败文档")),
     ("success_docs", ("成功", "成功文档")),
     ("total_chunks", ("切片", "chunk", "分段")),
+)
+
+# 业务库关键词：命中即进入 biz_query（内部还会做意图识别与权限/合规校验）
+_BIZ_KEYWORDS = (
+    "订单", "下单记录", "我的订单", "库存", "仓库", "sku", "客户资料", "客户信息",
+    "手机号", "邮箱", "考勤", "打卡记录", "迟到记录", "薪资", "工资条", "奖金明细", "提成",
+    "员工工资", "工资明细", "排班记录", "名下客户", "归属客户",
 )
 
 
@@ -56,6 +63,13 @@ def keyword_decision(query: str) -> dict:
             "reason": "含统计关键词，命中文档统计工具兜底",
         }
 
+    if any(k in q.lower() for k in _BIZ_KEYWORDS):
+        return {
+            "tool": "biz_query",
+            "args": {"query": q},
+            "reason": "含业务数据关键词，路由到业务库查询（内部做意图识别与闸门校验）",
+        }
+
     return {
         "tool": "knowledge_search",
         "args": {"query": q},
@@ -66,8 +80,8 @@ def keyword_decision(query: str) -> dict:
 def llm_plan_decision(query: str) -> dict | None:
     """尝试 LLM 结构化决策；不可用或解析失败时返回 None，由调用方兜底。"""
     try:
-        from llm import chat
-        from prompts import PLAN_SYSTEM_PROMPT
+        from ..llm import chat
+        from ..prompts import PLAN_SYSTEM_PROMPT
 
         raw = chat(
             [
@@ -78,10 +92,13 @@ def llm_plan_decision(query: str) -> dict | None:
         )
         data = json.loads(raw or "{}")
         tool = data.get("tool")
-        if tool in ("knowledge_search", "calculator", "doc_stats"):
+        if tool in ("knowledge_search", "calculator", "doc_stats", "biz_query"):
+            args = data.get("args") or {}
+            if tool == "biz_query":
+                args = {"query": str(args.get("query") or query)}
             return {
                 "tool": tool,
-                "args": data.get("args") or {},
+                "args": args,
                 "reason": data.get("reason") or "LLM 结构化决策",
             }
         if tool in (None, "null"):

@@ -8,10 +8,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
-from errors import BizError, ERR_PARAM, ERR_UNAUTHORIZED, ok
-from config import settings
-from services import account_store, audit, security
-from services.auth_deps import COOKIE_NAME, SESSION_SECONDS, get_current_user
+from ..errors import BizError, ERR_PARAM, ERR_UNAUTHORIZED, ok
+from ..config import settings
+from ..services import account_store, audit, security
+from ..services.auth_deps import COOKIE_NAME, SESSION_SECONDS, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -27,6 +27,12 @@ class LoginRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str = Field(min_length=1, max_length=PASSWORD_MAX_LEN)
     new_password: str = Field(min_length=PASSWORD_MIN_LEN, max_length=PASSWORD_MAX_LEN)
+
+
+class ProfileUpdateRequest(BaseModel):
+    """昵称：1–32 个字符，服务端再去首尾空白并拒绝纯空白。"""
+
+    display_name: str = Field(min_length=1, max_length=32)
 
 
 def _public_user(user: dict) -> dict:
@@ -161,3 +167,29 @@ async def change_password(
         {"revoked_sessions": revoked},
     )
     return ok({"revoked_sessions": revoked}, "密码已修改")
+
+
+@router.patch("/profile")
+async def update_profile(
+    body: ProfileUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """PATCH /api/auth/profile —— 修改本人昵称（display_name）。"""
+    name = body.display_name.strip()
+    if not name:
+        raise BizError(ERR_PARAM, "昵称不能为空", http_status=400)
+    if any(ord(ch) < 32 for ch in name):
+        raise BizError(ERR_PARAM, "昵称不能包含控制字符", http_status=400)
+    if name == (user.get("display_name") or ""):
+        return ok(_public_user(user), "昵称未变化")
+
+    updated = await account_store.update_display_name(user["user_id"], name)
+    if not updated:
+        raise BizError(ERR_UNAUTHORIZED, "账号不可用，请重新登录", http_status=401)
+
+    await audit.log_operation(
+        user["user_id"], audit.AUTH_PROFILE, "user", user["user_id"], 1,
+        {"before": user.get("display_name"), "after": name},
+    )
+    fresh = await account_store.get_user_by_id(user["user_id"])
+    return ok(_public_user(fresh or {**user, "display_name": name}), "昵称已更新")

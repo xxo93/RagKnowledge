@@ -24,10 +24,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
 from pydantic import BaseModel, Field
 
-from errors import BizError, ok, ERR_INGEST_FAILED
-from config import settings
-from services import audit, ingest, vector_store as vs, maintenance
-from services.auth_deps import require_admin
+from ..errors import BizError, ok, ERR_INGEST_FAILED
+from ..config import settings
+from ..services import app_config, audit, ingest, vector_store as vs, maintenance
+from ..services.auth_deps import require_admin
 
 logger = logging.getLogger("rag.docs")
 
@@ -145,9 +145,16 @@ def _chunk_folder(upload_id: str) -> Path:
     return settings.chunk_dir / upload_id
 
 
-def _cleanup_stale_chunks(keep_id: Optional[str] = None) -> None:
-    """清理超过 UPLOAD_CHUNK_STALE_HOURS 未完成的分片目录（上传中断留下的残留）。"""
-    cutoff = time.time() - settings.UPLOAD_CHUNK_STALE_HOURS * 3600
+async def _cleanup_stale_chunks(keep_id: Optional[str] = None) -> None:
+    """清理超过 UPLOAD_CHUNK_STALE_HOURS 未完成的分片目录（上传中断留下的残留）。
+
+    过期时长从配置中心读取（可热调整），不传时用 settings 默认值。
+    """
+    try:
+        stale_hours = int(await app_config.get_value("UPLOAD_CHUNK_STALE_HOURS"))
+    except Exception:  # noqa: BLE001 —— 配置读不到不应阻断上传
+        stale_hours = int(settings.UPLOAD_CHUNK_STALE_HOURS)
+    cutoff = time.time() - stale_hours * 3600
     for item in settings.chunk_dir.iterdir():
         try:
             if not item.is_dir() or item.name == keep_id:
@@ -183,11 +190,13 @@ async def upload_chunk(
 
     folder = _chunk_folder(upload_id)
     if chunk_index == 0:
-        _cleanup_stale_chunks(keep_id=upload_id)
+        await _cleanup_stale_chunks(keep_id=upload_id)
         shutil.rmtree(folder, ignore_errors=True)  # 同 id 重传时从第 0 片重新开始
     folder.mkdir(parents=True, exist_ok=True)
 
-    content = await _read_capped(file, settings.upload_chunk_max_bytes, settings.UPLOAD_CHUNK_MAX_MB)
+    # 单片上限来自配置中心（可热调整），改完立即对新请求生效
+    chunk_max_mb = int(await app_config.get_value("UPLOAD_CHUNK_MAX_MB"))
+    content = await _read_capped(file, chunk_max_mb * 1024 * 1024, chunk_max_mb)
     part = folder / f"{chunk_index:05d}.part"
     tmp = part.with_suffix(".tmp")
     tmp.write_bytes(content)
@@ -224,7 +233,8 @@ async def upload_complete(payload: CompleteUploadRequest, user: dict = Depends(r
 
     # 合并前先按分片大小求和做总大小校验，超限时不必把内容拼进内存
     total_size = sum(p.stat().st_size for p in parts)
-    _validate_upload(payload.file_name, total_size, max_bytes=settings.upload_total_max_bytes)
+    total_max_mb = int(await app_config.get_value("UPLOAD_TOTAL_MAX_MB"))
+    _validate_upload(payload.file_name, total_size, max_bytes=total_max_mb * 1024 * 1024)
 
     try:
         buf = bytearray()

@@ -113,7 +113,48 @@ CREATE TABLE IF NOT EXISTS chat_record (
   answer          TEXT   NOT NULL,
   tool_call_info  JSONB  DEFAULT NULL,
   source_ref      JSONB  DEFAULT NULL,
+  -- 本条回答走了哪条能力链路：knowledge / web / fallback_guide / fallback_contact / tool / chat / biz_query
+  answer_mode     VARCHAR(16) NOT NULL DEFAULT 'knowledge',
+  -- 业务库查询的表格帧（列定义 + 已脱敏行 + 下载链接），供历史回放还原表格卡；非业务查询为 NULL
+  table_payload   JSONB  DEFAULT NULL,
   create_time     TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_session_id ON chat_record (session_id);
 COMMENT ON TABLE chat_record IS '对话记录';
+-- 旧库升级（M3）：已存在的 chat_record 补列，历史行默认按 knowledge 处理
+ALTER TABLE chat_record ADD COLUMN IF NOT EXISTS answer_mode VARCHAR(16) NOT NULL DEFAULT 'knowledge';
+-- 旧库升级（M5+）：补表格帧列，历史行保持 NULL（回放时只显示文字汇总）
+ALTER TABLE chat_record ADD COLUMN IF NOT EXISTS table_payload JSONB DEFAULT NULL;
+
+-- ---------- 运行时配置中心表 app_config（M1）----------
+-- 只存被管理员显式改过的参数；未出现的 key 一律回退 .env / 代码默认值。
+-- 取值优先级：app_config > .env > 代码默认；「恢复默认」= 删除对应行。
+CREATE TABLE IF NOT EXISTS app_config (
+  key          VARCHAR(64) PRIMARY KEY,
+  value_json   JSONB       NOT NULL,
+  group_name   VARCHAR(32) NOT NULL,
+  value_type   VARCHAR(16) NOT NULL,              -- int / float / bool / str / enum
+  default_json JSONB       NULL,
+  min_value    DOUBLE PRECISION NULL,
+  max_value    DOUBLE PRECISION NULL,
+  updated_by   BIGINT      NULL REFERENCES app_user(user_id) ON DELETE SET NULL,
+  updated_at   TIMESTAMP   NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE app_config IS '运行时配置（热生效，仅存显式改过的项）';
+CREATE INDEX IF NOT EXISTS idx_app_config_group ON app_config (group_name);
+
+-- ---------- 大结果导出令牌 export_token（M5）----------
+-- 只存 token 的 SHA-256，文件落在 data/exports/；expires_at 为 NULL 表示永不过期，
+-- 有效期内可重复下载；仅“设置过有效期且已过期”的记录由后台任务清理。
+CREATE TABLE IF NOT EXISTS export_token (
+  token_hash    CHAR(64) PRIMARY KEY,
+  user_id       BIGINT      NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE,
+  file_path     VARCHAR(512) NOT NULL,
+  filename      VARCHAR(255) NOT NULL,
+  row_count     INT         NOT NULL DEFAULT 0,
+  expires_at    TIMESTAMP   NULL,
+  downloaded_at TIMESTAMP   NULL,
+  created_at    TIMESTAMP   NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE export_token IS '业务查询 CSV 导出令牌（仅存哈希，绑定用户 + 可选有效期）';
+CREATE INDEX IF NOT EXISTS idx_export_token_expires ON export_token (expires_at);

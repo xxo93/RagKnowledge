@@ -2,7 +2,7 @@
 
 运行（backend/）：python -m pytest tests/test_agent_plan.py -v
 """
-from agent.decision import keyword_decision, infer_stat_type
+from backend.agent.decision import keyword_decision, infer_stat_type
 
 
 def test_calculator_route_for_pure_arithmetic():

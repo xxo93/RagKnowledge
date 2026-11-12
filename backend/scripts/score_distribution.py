@@ -15,11 +15,11 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from config import settings  # noqa: E402
-from services import embedder as embed_mod, vector_store as vs  # noqa: E402
+import backend.db  # noqa: E402
+from backend.config import settings  # noqa: E402
+from backend.services import embedder as embed_mod, vector_store as vs  # noqa: E402
 
 # 与 assess_retrieval.py 标注集一致：期望文档 + 问题
 CASES = [

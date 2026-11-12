@@ -18,12 +18,12 @@ import selectors
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from config import settings, ROOT_DIR  # noqa: E402
-from errors import BizError  # noqa: E402
-from services import ingest, vector_store as vs, rag  # noqa: E402
+import backend.db  # noqa: E402
+from backend.config import settings, ROOT_DIR  # noqa: E402
+from backend.errors import BizError  # noqa: E402
+from backend.services import ingest, vector_store as vs, rag  # noqa: E402
 
 # 实测目标：仅验证向量召回通道，关闭 rerank 以避免额外重排调用费
 settings.RERANK_ENABLED = False

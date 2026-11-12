@@ -17,19 +17,19 @@ import selectors
 import sys
 from pathlib import Path
 
-# 保证无论从哪个目录启动，都能 import 到 backend 包与 main:app
+# 保证无论从哪个目录启动，都能 import 到 backend 包（入口为 backend.main:app）
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+if str(BACKEND_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR.parent))
 
 from uvicorn import Config, Server  # noqa: E402
 
-from config import settings  # noqa: E402
+from backend.config import settings  # noqa: E402
 
 
 def main() -> None:
     config = Config(
-        "main:app",
+        "backend.main:app",
         host=settings.APP_HOST,
         port=settings.APP_PORT,
         log_level="info",

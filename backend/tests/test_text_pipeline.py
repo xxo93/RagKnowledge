@@ -1,6 +1,6 @@
 """文本清洗与切片单测（services/cleaner.py、services/splitter.py），无外部依赖。"""
-from services.cleaner import clean_text
-from services.splitter import split_text, chunk_with_index
+from backend.services.cleaner import clean_text
+from backend.services.splitter import split_text, chunk_with_index
 
 
 def test_clean_strips_control_chars_and_extra_blank_lines():

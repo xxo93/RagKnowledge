@@ -26,7 +26,9 @@ const docSummaryHtml = computed(() => highlightText(docSummary.value, highlightT
 const summaryHtml = computed(() => highlightText(summary.value, highlightTerms.value))
 const excerptHtml = computed(() => highlightText(excerpt.value, highlightTerms.value))
 const score = computed(() => Number(props.source.score || 0))
-const isLowRelevance = computed(() => score.value > 0 && score.value < 0.5)
+// 联网来源没有相似度分数，用展示标签代替，避免出现"相似度 0.00"的误导
+const isWeb = computed(() => props.source.source_type === 'web')
+const isLowRelevance = computed(() => !isWeb.value && score.value > 0 && score.value < 0.5)
 
 const detailId = computed(() => `source-detail-${props.index}`)
 const scoreText = computed(() => score.value.toFixed(2))
@@ -44,6 +46,15 @@ async function copyExcerpt() {
     ElMessage.warning('当前浏览器不支持自动复制')
   }
 }
+
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(props.source.url || '')
+    ElMessage.success('链接已复制')
+  } catch {
+    ElMessage.warning('当前浏览器不支持自动复制')
+  }
+}
 </script>
 
 <template>
@@ -57,30 +68,37 @@ async function copyExcerpt() {
     >
       <span class="source-index">{{ index + 1 }}</span>
       <span class="source-title" :title="docTitle">{{ docTitle }}</span>
-      <el-tag v-if="isLowRelevance" size="small" type="info">低相关</el-tag>
+      <el-tag v-if="isWeb" size="small" type="warning" effect="plain">联网</el-tag>
+      <el-tag v-else-if="isLowRelevance" size="small" type="info">低相关</el-tag>
       <span class="source-scores">
         <el-tag v-if="source.rerank_score != null" size="small" type="success">
           重排 {{ Number(source.rerank_score).toFixed(2) }}
         </el-tag>
-        <el-tag size="small" :type="scoreType">相似度 {{ scoreText }}</el-tag>
+        <el-tag v-if="!isWeb" size="small" :type="scoreType">相似度 {{ scoreText }}</el-tag>
         <span class="expand-icon">{{ expanded ? '▴' : '▸' }}</span>
       </span>
     </button>
 
     <div v-if="!expanded" class="source-summary-wrap">
       <div v-if="docSummary" class="source-summary doc-summary">文档：<span v-html="docSummaryHtml"></span></div>
-      <div v-if="summary" class="source-summary">片段：<span v-html="summaryHtml"></span></div>
+      <div v-if="summary" class="source-summary">
+        {{ isWeb ? '摘要：' : '片段：' }}<span v-html="summaryHtml"></span>
+      </div>
     </div>
 
     <div v-if="expanded" :id="detailId" class="source-detail">
+      <div v-if="isWeb && source.url" class="source-url">
+        链接：<a :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.url }}</a>
+      </div>
       <div v-if="docSummary" class="doc-summary-line">文档摘要：<span v-html="docSummaryHtml"></span></div>
-      <div class="source-meta">
+      <div v-if="!isWeb" class="source-meta">
         片段 #{{ source.chunk_index ?? '-' }}
         <span v-if="source.chunk_total"> · 共 {{ source.chunk_total }} 片</span>
       </div>
       <div class="source-excerpt" v-html="excerptHtml"></div>
       <div class="source-actions">
-        <el-button link size="small" @click="copyExcerpt">复制片段</el-button>
+        <el-button link size="small" @click="copyExcerpt">复制{{ isWeb ? '摘要' : '片段' }}</el-button>
+        <el-button v-if="isWeb && source.url" link size="small" @click="copyLink">复制链接</el-button>
       </div>
     </div>
   </div>
@@ -168,6 +186,22 @@ async function copyExcerpt() {
   font-size: 12px;
   color: var(--text-secondary);
   margin-bottom: 4px;
+}
+
+.source-url {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.source-url a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.source-url a:hover {
+  text-decoration: underline;
 }
 
 .source-excerpt {

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from errors import BizError, ERR_INGEST_FAILED
+from ..errors import BizError, ERR_INGEST_FAILED
 
 SUPPORTED_EXTS = {".pdf", ".docx", ".md"}
 

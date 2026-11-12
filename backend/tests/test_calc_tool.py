@@ -4,7 +4,7 @@
     python -m pytest tests/test_calc_tool.py -v
 本用例无外部依赖、不连数据库。
 """
-from agent.tools import calc_tool
+from backend.agent.tools import calc_tool
 
 
 def test_basic_multiply_matches_acceptance():

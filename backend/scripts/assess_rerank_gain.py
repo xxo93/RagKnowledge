@@ -25,11 +25,11 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import db  # noqa: E402
-from config import settings, ROOT_DIR  # noqa: E402
-from services import ingest, rag, vector_store as vs  # noqa: E402
+import backend.db  # noqa: E402
+from backend.config import settings, ROOT_DIR  # noqa: E402
+from backend.services import ingest, rag, vector_store as vs  # noqa: E402
 
 # 留存基线（正式样料 4 篇、各 1 片；脚本只临时 +N 测试文档并复原）
 BASELINE_DOCS = 4

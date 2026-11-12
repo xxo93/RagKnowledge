@@ -18,6 +18,11 @@ export function changePassword(payload) {
   return http.post('/auth/password', payload)
 }
 
+// PATCH /api/auth/profile —— 修改本人昵称（display_name）
+export function updateProfile(payload) {
+  return http.patch('/auth/profile', payload)
+}
+
 // GET /api/auth/demo-hint —— 演示账号提示；后端开关关闭时返回 {enabled:false}
 export function fetchDemoHint() {
   return http.get('/auth/demo-hint')

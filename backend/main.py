@@ -12,17 +12,19 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import settings
-from errors import register_exception_handlers, ok
-from app_logging import register_middlewares
-from db import init_pool, close_pool, is_ready
-from routers import system, docs, session, chat, auth, admin
+from .config import settings
+from .errors import register_exception_handlers, ok
+from .app_logging import register_middlewares
+from .db import init_pool, close_pool, is_ready
+from .routers import system, docs, session, chat, auth, admin, admin_config, biz, export
+from .services import chat_store, export_store
 
 logger = logging.getLogger("rag.main")
 
@@ -33,6 +35,10 @@ async def lifespan(_: FastAPI):
     for w in settings.safety_check():
         logger.warning("配置提示：%s", w)
     await init_pool()
+    await chat_store.ensure_record_schema()
+    await export_store.ensure_export_schema()
+    await export_store.cleanup_expired()
+    cleanup_task = asyncio.create_task(export_store.cleanup_loop())
     logger.info(
         "应用启动：db_ready=%s | LLM=%s | EMBEDDING_DIM=%d | TOP_K=%d",
         is_ready(),
@@ -42,6 +48,11 @@ async def lifespan(_: FastAPI):
     )
     yield
     # ---- 关闭 ----
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - 关闭阶段不报错
+        pass
     await close_pool()
     logger.info("应用已关闭，连接池已回收")
 
@@ -72,6 +83,9 @@ app.include_router(session.router)
 app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(admin_config.router)
+app.include_router(biz.router)
+app.include_router(export.router)
 
 
 @app.get("/health", tags=["meta"])

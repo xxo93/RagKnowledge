@@ -106,7 +106,12 @@ export function useChat() {
         query: pendingQuery,
         content: r.answer || '',
         toolCalls: r.tool_call_info || [],
-        sources: r.source_ref || []
+        sources: r.source_ref || [],
+        // 历史回放同样带上能力链路，前端才能标出"这条不是内部知识库答的"
+        answerMode: r.answer_mode || 'knowledge',
+        notice: null,
+        // 业务查询的表格帧已随记录落库（table_payload），刷新/切页后仍能还原表格卡与下载链接
+        table: r.table_payload || null
       })
     }
     return msgs
@@ -230,7 +235,8 @@ export function useChat() {
     const assistant = reactive({
       role: 'assistant', query: q, content: '', toolCalls: [], sources: [],
       streaming: true, error: false, aborted: false, saved: true,
-      errorCode: null, errorMsg: '', elapsed_ms: null, source_count: null
+      errorCode: null, errorMsg: '', elapsed_ms: null, source_count: null,
+      answerMode: null, notice: null, table: null
     })
     state.messages.push(assistant)
     state.streaming = true
@@ -252,6 +258,14 @@ export function useChat() {
       onSource({ sources }) {
         assistant.sources = sources || []
       },
+      // 提示帧：联网兜底使用中 / 联网不可用；先于 token 到达，正文上方展示
+      onNotice(data) {
+        if (data?.msg) assistant.notice = { code: data.code || '', level: data.level || 'info', msg: data.msg }
+      },
+      // 表格帧（M4）：业务库查询结果；服务端已完成脱敏与行数限制
+      onTable(data) {
+        assistant.table = data || null
+      },
       // 事件 done 帧与读取结束都可能触发，保持幂等复位
       onDone(data) {
         assistant.streaming = false
@@ -260,6 +274,7 @@ export function useChat() {
         client.value = null
         assistant.elapsed_ms = data?.elapsed_ms ?? null
         assistant.source_count = data?.source_count ?? assistant.sources.length
+        if (data?.answer_mode) assistant.answerMode = data.answer_mode
         state.pendingTitleSessionId = null
 
         // 后端首问自动提炼标题；就地更新当前列表项，避免刷新前闪烁旧标题

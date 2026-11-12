@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from services import vector_store as vs
+from ...services import vector_store as vs
 
 logger = logging.getLogger("rag.tool.stats")
 

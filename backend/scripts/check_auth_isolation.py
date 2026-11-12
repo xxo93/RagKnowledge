@@ -21,11 +21,11 @@ import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
-from db import close_pool, init_pool  # noqa: E402
-from errors import BizError  # noqa: E402
-from services import account_store, chat_store  # noqa: E402
+from backend.db import close_pool, init_pool  # noqa: E402
+from backend.errors import BizError  # noqa: E402
+from backend.services import account_store, chat_store  # noqa: E402
 
 results: list[tuple[str, bool]] = []
 

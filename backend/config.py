@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""                # 未配置时 LLM 生成能力不可用
     LLM_MODEL: str = "deepseek-chat"
     LLM_TIMEOUT: int = 60
+    # 生成参数：可在「配置中心」在线调整，这里是 .env / 代码默认值
+    LLM_TEMPERATURE: float = 0.3
+    LLM_MAX_TOKENS: int = 1024
     # plan 是否优先使用 LLM 结构化决策；False 时回退确定性关键词决策
     LLM_PLAN_ENABLED: bool = True
 
@@ -65,8 +68,12 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 100
 
     # ---------- 检索 ----------
+    # 展示 Top-K（最终交给 LLM 的片段数）；可在配置中心在线调整
     TOP_K: int = 5
-    RETRIEVAL_MIN_SCORE: float = 0.0
+    # 向量召回候选数（重排的输入规模）；候选数应 >= TOP_K
+    RETRIEVAL_CANDIDATES: int = 20
+    # 相似度阈值（作用于余弦相似度，不是 rerank_score）；0 表示不过滤
+    RETRIEVAL_MIN_SCORE: float = 0.5
     RERANK_ENABLED: bool = False
     RERANK_MODEL: str = "gte-rerank-v2"
     RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
@@ -95,6 +102,58 @@ class Settings(BaseSettings):
     # 前端 sse.js 对 ":" 开头行直接跳过，不产生业务事件，仅用于防止代理/网关静默断连。
     SSE_HEARTBEAT_SEC: float = 10.0
 
+    # ---------- 联网兜底（M3）----------
+    # 内部知识不足时是否允许联网检索；关掉后 web 模式等同未配置，直接回落话术
+    WEB_SEARCH_ENABLED: bool = True
+    # 支持的供应商：bailian（阿里百炼，默认）/ bocha（博查）/ tavily
+    # 可在配置中心热切换，切换后只有"供应商默认地址"与"Key 归属"跟着变，兜底语义不变
+    WEB_SEARCH_PROVIDER: str = "bailian"
+    # 留空 = 用该供应商的默认地址；百炼默认走 DashScope 原生 text-generation 端点
+    WEB_SEARCH_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
+    # 百炼联网问答使用的模型（需支持 enable_search）；留空 = qwen-plus
+    WEB_SEARCH_MODEL: str = "qwen-plus"
+    # 百炼搜索专用 Key：与 EMBEDDING_API_KEY 同属 DashScope 账号，但用独立变量名，
+    # 便于单独轮换/停用；为空时才回落到 EMBEDDING_API_KEY（同厂商，非跨厂商借用）
+    BAILIAN_SEARCH_API_KEY: str = ""
+    # 其他供应商（博查 / Tavily）各自的 Key，与百炼 Key 互不通用
+    WEB_SEARCH_API_KEY: str = ""
+    # 显式允许时才把 LLM Key 当搜索 Key；默认关闭，避免跨厂商泄露凭据
+    WEB_SEARCH_REUSE_LLM_KEY: bool = False
+    # 百炼"搜索+生成"一次完成，耗时比纯搜索 API 长，默认给到 20s
+    WEB_SEARCH_TIMEOUT: float = 20.0
+    WEB_SEARCH_MAX_RESULTS: int = 5
+    # 百炼搜索策略：turbo（默认，速度与效果均衡）/ max（更全但更慢）/ agent（多轮检索，需流式）
+    WEB_SEARCH_STRATEGY: str = "turbo"
+
+    # 内部知识不足时的兜底方式：web（联网）/ guide（引导重问）/ contact_admin（联系管理员）
+    FALLBACK_MODE: str = "web"
+    # 过滤后有效命中少于该条数即判"内部知识不足"，不用残片作答
+    FALLBACK_MIN_HITS: int = 2
+    FALLBACK_TEXT_GUIDE: str = (
+        "内部知识库里没有找到足够相关的内容。方便的话，请补充一点背景："
+        "你想了解的是哪份文档、哪个业务流程，或者具体想查的字段与时间范围？描述得越具体，我越容易定位到资料。"
+    )
+    FALLBACK_TEXT_CONTACT: str = (
+        "内部知识库里没有找到足够相关的内容。为避免给出不准确的信息，本次不作答，"
+        "请联系系统管理员补充相关文档或开通对应能力。"
+    )
+    # ---------- 业务库查询（M4）----------
+    # 业务库只读 DSN：建议单独建只读角色；留空 = 复用主库 DSN，但仍在 READ ONLY 事务里执行
+    BIZDB_DSN_READONLY: str = ""
+    # 意图注册表文件（相对 backend 目录）
+    BIZ_INTENTS_FILE: str = "biz_intents.json"
+    # 内联展示行数上限（超过则只给汇总 + CSV 下载链接，见 M5）
+    BIZ_QUERY_INLINE_MAX_ROWS: int = 100
+    # 单次查询硬上限：注册表 max_rows 与它取小（默认 3000，对应需求 4.6 的 3000 行用例）
+    BIZ_QUERY_HARD_MAX_ROWS: int = 3000
+    # 语句超时（秒），超时按 40001 返回，不拖垮连接
+    BIZ_QUERY_TIMEOUT: float = 5.0
+    # 每个用户每分钟最多查询次数
+    BIZ_QUERY_RATE_PER_MIN: int = 10
+    # 大结果导出的落盘目录（相对项目根）与下载链接有效期（分钟；0 = 永不过期）
+    EXPORT_DIR_NAME: str = "data/exports"
+    BIZ_EXPORT_TTL_MINUTES: int = 0
+
     # ---------- 文件上传 ----------
     # 单次请求整体上传的硬上限（/docs/upload、/docs/upload/batch 走这条路径）
     UPLOAD_MAX_MB: int = 10
@@ -107,6 +166,9 @@ class Settings(BaseSettings):
     # 分片落盘目录（相对项目根）与过期清理时长；未完成的上传超过该时长会被清理
     UPLOAD_CHUNK_DIR_NAME: str = "data/uploads/.chunks"
     UPLOAD_CHUNK_STALE_HOURS: int = 24
+    # 前端知识库页的默认分块大小与并发数（用户仍可在页面上自行调整，选择会存 localStorage）
+    UPLOAD_DEFAULT_CHUNK_MB: int = 4
+    UPLOAD_DEFAULT_CONCURRENCY: int = 3
 
     # ---------- 默认管理员（演示环境开箱即用）----------
     # 由 scripts/migrate_auth_multitenant.py 首次建库与 scripts/ensure_admin.py 使用；

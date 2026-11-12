@@ -9,18 +9,22 @@ import json
 import logging
 from typing import Optional
 
-from db import get_pool
+from ..db import get_pool
 
 logger = logging.getLogger("rag.audit")
 
 # 审计动作常量
 AUTH_LOGIN = "AUTH_LOGIN"
 AUTH_PASSWORD = "AUTH_PASSWORD"
+AUTH_PROFILE = "AUTH_PROFILE"
 DOC_UPLOAD = "DOC_UPLOAD"
 DOC_DELETE = "DOC_DELETE"
 REPARSE = "REPARSE"
 REINDEX = "REINDEX"
 USER_MANAGE = "USER_MANAGE"
+CONFIG_UPDATE = "CONFIG_UPDATE"
+BIZ_QUERY = "BIZ_QUERY"
+BIZ_EXPORT = "BIZ_EXPORT"
 
 
 async def log_operation(

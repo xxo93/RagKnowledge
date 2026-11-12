@@ -18,8 +18,8 @@ from psycopg_pool import AsyncConnectionPool
 from pgvector.psycopg import register_vector_async
 from pgvector import Vector
 
-from config import settings
-from errors import BizError, ERR_DB_UNAVAILABLE
+from .config import settings
+from .errors import BizError, ERR_DB_UNAVAILABLE
 
 logger = logging.getLogger("rag.db")
 

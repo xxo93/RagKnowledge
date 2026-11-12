@@ -14,8 +14,8 @@ from typing import Optional
 
 import psycopg
 
-from db import get_pool
-from errors import BizError, ERR_PARAM, ERR_SESSION_NOT_FOUND
+from ..db import get_pool
+from ..errors import BizError, ERR_PARAM, ERR_SESSION_NOT_FOUND
 
 logger = logging.getLogger("rag.chat_store")
 
@@ -28,6 +28,21 @@ def _json(value) -> Optional[str]:
     if not value:
         return None
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+# ---------------- 结构升级 ----------------
+async def ensure_record_schema() -> None:
+    """启动时补齐 chat_record 的新列（幂等）；失败只记 warning，不影响服务启动。
+
+    老库没有 table_payload 时，历史回放只能显示文字汇总；补列后新记录可还原表格卡。
+    """
+    try:
+        pool = get_pool()
+        async with pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("ALTER TABLE chat_record ADD COLUMN IF NOT EXISTS table_payload JSONB DEFAULT NULL")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat_record.table_payload 补列失败：%s", type(exc).__name__)
 
 
 # ---------------- chat_session ----------------
@@ -228,9 +243,15 @@ async def insert_record(
     answer: str,
     tool_call_info: Optional[list[dict]] = None,
     source_ref: Optional[list[dict]] = None,
+    answer_mode: str = "knowledge",
+    table_payload: Optional[dict] = None,
 ) -> Optional[int]:
     """落库一条问答；成功返回 record_id，未保存返回 None。
 
+    answer_mode 记录本条回答用了哪条能力链路（knowledge / web / fallback_* / tool / chat / biz_query），
+    历史回放时前端据此还原"这条是不是内部知识库答的"。
+    table_payload 保存业务库查询的表格帧（列定义 + 已脱敏行 + 下载链接信息），
+    刷新/切页后历史消息仍能还原表格卡，而不是只剩一句文字汇总。
     会话已删除、外键冲突等竞态场景直接返回 None，不向路由层抛出底层数据库异常。
     """
     if await _get_session(session_id) is None:
@@ -244,8 +265,8 @@ async def insert_record(
                 async with conn.cursor() as cur:
                     await cur.execute(
                         """
-                        INSERT INTO chat_record (session_id, query, answer, tool_call_info, source_ref)
-                        VALUES (%(sid)s, %(q)s, %(a)s, %(tc)s::jsonb, %(src)s::jsonb)
+                        INSERT INTO chat_record (session_id, query, answer, tool_call_info, source_ref, answer_mode, table_payload)
+                        VALUES (%(sid)s, %(q)s, %(a)s, %(tc)s::jsonb, %(src)s::jsonb, %(mode)s, %(tbl)s::jsonb)
                         RETURNING record_id
                         """,
                         {
@@ -254,6 +275,8 @@ async def insert_record(
                             "a": answer or "",
                             "tc": _json(tool_call_info),
                             "src": _json(source_ref),
+                            "mode": answer_mode or "knowledge",
+                            "tbl": _json(table_payload),
                         },
                     )
                     return int((await cur.fetchone())[0])
@@ -287,7 +310,7 @@ async def list_records(
                 params["off"] = offset
             await cur.execute(
                 f"""
-                SELECT record_id, query, answer, tool_call_info, source_ref, create_time
+                SELECT record_id, query, answer, tool_call_info, source_ref, create_time, answer_mode, table_payload
                 FROM chat_record
                 WHERE session_id = %(sid)s
                 ORDER BY record_id ASC
@@ -302,6 +325,7 @@ async def list_records(
                 # psycopg 已把 jsonb 解码为 list/dict；这里兜底 None
                 it.setdefault("tool_call_info", None)
                 it.setdefault("source_ref", None)
+                it.setdefault("table_payload", None)
             return total, items
 
 

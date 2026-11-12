@@ -177,6 +177,23 @@ async function onRemove(session) {
   margin-bottom: 10px;
 }
 
+/* 会话很多时列表自己滚动，header（新建/搜索）保持固定，不把整页撑出可视区 */
+.session-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-card :deep(.el-card__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .group-title {
   font-size: 11px;
   color: var(--text-secondary);
@@ -198,10 +215,37 @@ async function onRemove(session) {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* 悬停跟随鼠标：当前指针所在的那一条会实时高亮 + 左侧竖条，便于定位 */
+.session-list li:hover {
+  background: color-mix(in srgb, var(--primary) 7%, var(--panel));
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.session-list li:hover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
 .session-list li.active {
   background: var(--primary-light);
+}
+
+.session-list li.active:hover {
+  background: var(--primary-light);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.session-list li.active:hover::before {
+  background: var(--primary);
 }
 
 .session-list li.active::before {

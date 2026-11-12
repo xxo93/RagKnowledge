@@ -2,7 +2,7 @@
 
 运行（backend/）：python -m pytest tests/test_agent_dedup.py -v
 """
-from agent.dedup import call_key, normalize_args, is_duplicate
+from backend.agent.dedup import call_key, normalize_args, is_duplicate
 
 
 def test_search_key_normalizes_extra_whitespace():

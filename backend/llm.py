@@ -10,8 +10,8 @@ import asyncio
 import logging
 from typing import AsyncIterator, Optional
 
-from config import settings
-from errors import BizError, ERR_LLM_UNAVAILABLE
+from .config import settings
+from .errors import BizError, ERR_LLM_UNAVAILABLE
 
 logger = logging.getLogger("rag.llm")
 
@@ -38,13 +38,36 @@ def get_client():
     return _client
 
 
-def chat(messages: list[dict], *, temperature: float = 0.3, json_mode: bool = False) -> str:
-    """同步一次性生成；用于意图判断、短文本汇总等不需要 token 流的场景。"""
+def _generation_params(temperature: Optional[float]) -> tuple[float, int]:
+    """解析生成参数：显式入参优先，否则读运行时配置（配置中心可在线调）。
+
+    同步函数（chat 在线程里跑）不能 await 数据库，因此只读 app_config 的进程内缓存；
+    缓存由检索/配置接口等异步入口按 5s TTL 刷新，保存配置时也会立即刷新。
+    """
+    try:
+        from .services import app_config
+
+        t = app_config.get_cached("LLM_TEMPERATURE")
+        max_tokens = app_config.get_cached("LLM_MAX_TOKENS")
+    except Exception:  # noqa: BLE001 - 配置读取失败不得影响生成
+        t = settings.LLM_TEMPERATURE
+        max_tokens = settings.LLM_MAX_TOKENS
+    resolved_t = float(t) if temperature is None else float(temperature)
+    return resolved_t, int(max_tokens)
+
+
+def chat(messages: list[dict], *, temperature: Optional[float] = None, json_mode: bool = False) -> str:
+    """同步一次性生成；用于意图判断、短文本汇总等不需要 token 流的场景。
+
+    temperature=None 时取配置中心的当前值（默认 0.3），不再硬编码在函数默认参数里。
+    """
     client = get_client()
+    resolved_t, max_tokens = _generation_params(temperature)
     kwargs: dict = {
         "model": settings.LLM_MODEL,
         "messages": messages,
-        "temperature": temperature,
+        "temperature": resolved_t,
+        "max_tokens": max_tokens,
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
@@ -52,13 +75,14 @@ def chat(messages: list[dict], *, temperature: float = 0.3, json_mode: bool = Fa
     return resp.choices[0].message.content or ""
 
 
-async def chat_stream(messages: list[dict], *, temperature: float = 0.3) -> AsyncIterator[str]:
+async def chat_stream(messages: list[dict], *, temperature: Optional[float] = None) -> AsyncIterator[str]:
     """流式生成 SSE token。
 
     OpenAI SDK 迭代是同步阻塞调用；这里在线程中生产内容，经 asyncio.Queue
     桥接为异步生成器。模型错误统一转换为 BizError，避免击穿 SSE 主链路。
     """
     client = get_client()
+    resolved_t, max_tokens = _generation_params(temperature)
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     sentinel = object()
@@ -68,7 +92,8 @@ async def chat_stream(messages: list[dict], *, temperature: float = 0.3) -> Asyn
             stream = client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 messages=messages,
-                temperature=temperature,
+                temperature=resolved_t,
+                max_tokens=max_tokens,
                 stream=True,
             )
             for chunk in stream:

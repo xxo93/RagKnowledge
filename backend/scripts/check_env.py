@@ -17,7 +17,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+    sys.path.insert(0, str(BACKEND_DIR.parent))
 
 # (import 名, pip 包说明, 是否必需)
 THIRD_PARTY = [
@@ -38,18 +38,22 @@ THIRD_PARTY = [
 ]
 
 # 项目内部模块（源码文件，不是 pip 安装对象；报错多为运行目录不对 / 文件缺失）
+# 包化后统一以 backend.<x> 绝对名导入（相对导入只在包内部语句里使用）
 INTERNAL = [
-    "config", "db", "errors", "app_logging", "prompts", "llm",
-    "services.loader", "services.cleaner", "services.splitter",
-    "services.embedder", "services.vector_store", "services.rag",
-    "services.ingest", "services.memory", "services.reranker",
-    "services.maintenance",
-    "services.security", "services.account_store", "services.auth_deps", "services.audit",
-    "agent.state", "agent.graph", "agent.decision",
-    "agent.tools.calc_tool", "agent.tools.search_tool", "agent.tools.doc_stats_tool",
-    "services.chat_store",
-    "routers.docs", "routers.session", "routers.chat", "routers.system",
-    "routers.auth", "routers.admin",
+    "backend.config", "backend.db", "backend.errors", "backend.app_logging",
+    "backend.prompts", "backend.llm",
+    "backend.services.loader", "backend.services.cleaner", "backend.services.splitter",
+    "backend.services.embedder", "backend.services.vector_store", "backend.services.rag",
+    "backend.services.ingest", "backend.services.memory", "backend.services.reranker",
+    "backend.services.maintenance",
+    "backend.services.security", "backend.services.account_store",
+    "backend.services.auth_deps", "backend.services.audit",
+    "backend.agent.state", "backend.agent.graph", "backend.agent.decision",
+    "backend.agent.tools.calc_tool", "backend.agent.tools.search_tool",
+    "backend.agent.tools.doc_stats_tool",
+    "backend.services.chat_store",
+    "backend.routers.docs", "backend.routers.session", "backend.routers.chat",
+    "backend.routers.system", "backend.routers.auth", "backend.routers.admin",
 ]
 
 
@@ -87,7 +91,7 @@ def main() -> int:
 
     print("\n== 3. FastAPI 应用装配、路由注册与探活 ==")
     try:
-        import main as app_module
+        import backend.main as app_module
 
         # 新版 FastAPI 的 include_router 为惰性 _IncludedRouter；OpenAPI schema 的 paths 是
         # 含完整前缀的权威端点清单（路由注册成功才会出现在 schema 中）。

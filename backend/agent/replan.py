@@ -9,12 +9,12 @@ from __future__ import annotations
 import json
 import logging
 
-from config import settings
-from agent import dedup
+from ..config import settings
+from . import dedup
 
 logger = logging.getLogger("rag.agent.replan")
 
-_TOOLS = ("knowledge_search", "calculator", "doc_stats")
+_TOOLS = ("knowledge_search", "calculator", "doc_stats", "biz_query")
 
 
 def _last_observation(state: dict) -> dict | None:
@@ -60,8 +60,8 @@ def llm_replan_decision(state: dict) -> dict | None:
     if not settings.LLM_REPLAN_ENABLED:
         return None
     try:
-        from llm import chat
-        from prompts import REPLAN_SYSTEM_PROMPT
+        from ..llm import chat
+        from ..prompts import REPLAN_SYSTEM_PROMPT
 
         brief = [_obs_brief(o) for o in (state.get("observations") or [])[-2:]]
         raw = chat(

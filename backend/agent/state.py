@@ -47,6 +47,7 @@ class SourceRef(TypedDict, total=False):
 class AgentState(TypedDict, total=False):
     query: str
     history: list[dict]
+    user: dict                     # 当前登录用户（user_id/role），业务库权限校验用
     round: int
     decision: Optional[Decision]
     observations: list[Observation]
@@ -64,11 +65,13 @@ def initial_state(
     query: str,
     history: list[dict] | None = None,
     event_sink: Optional[Callable[[dict], Awaitable[None]]] = None,
+    user: dict | None = None,
 ) -> AgentState:
     """构造初始状态（round=0，其余列表为空）。"""
     return AgentState(
         query=query,
         history=history or [],
+        user=user or {},
         round=0,
         decision=None,
         observations=[],

@@ -5,8 +5,8 @@ plan_next 默认不产出新决策、LLM 扩展点产出新决策、重复决策
 """
 from __future__ import annotations
 
-from agent import replan, dedup
-from config import settings
+from backend.agent import replan, dedup
+from backend.config import settings
 
 
 def _state(round_: int = 0, observations: list | None = None, used_keys: list | None = None) -> dict:

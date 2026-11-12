@@ -12,7 +12,7 @@ import logging
 
 import httpx
 
-from config import settings
+from ..config import settings
 
 logger = logging.getLogger("rag.reranker")
 
@@ -22,13 +22,25 @@ def _hit_text(hit: dict) -> str:
     return (hit.get("content") or hit.get("snippet") or "").strip()
 
 
-async def maybe_rerank(query: str, hits: list[dict]) -> list[dict]:
+async def maybe_rerank(
+    query: str,
+    hits: list[dict],
+    *,
+    enabled: bool | None = None,
+    top_n: int | None = None,
+) -> list[dict]:
     """开关关闭 / 空候选 / 无 Key 时原样返回；开启时按重排分降序并附 rerank_score。
+
+    enabled / top_n 由调用方从运行时配置中心传入（可在线调整）；为 None 时回退 settings，
+    保持脚本与测试直接调用本函数的旧行为。
 
     任何网络、超时、HTTP 非 2xx、返回结构异常都降级为原向量召回顺序，
     保证检索链路不被重排服务拖垮（与项目既有降级哲学一致）。
     """
-    if not settings.RERANK_ENABLED or not hits:
+    use_rerank = settings.RERANK_ENABLED if enabled is None else bool(enabled)
+    keep_setting = settings.RERANK_TOP_N if top_n is None else int(top_n)
+
+    if not use_rerank or not hits:
         return hits
     if not query or not query.strip():
         return hits
@@ -37,7 +49,7 @@ async def maybe_rerank(query: str, hits: list[dict]) -> list[dict]:
         return hits
 
     documents = [_hit_text(h) or " " for h in hits]
-    keep = settings.RERANK_TOP_N if settings.RERANK_TOP_N > 0 else len(hits)
+    keep = keep_setting if keep_setting > 0 else len(hits)
     payload = {
         "model": settings.RERANK_MODEL,
         "input": {"query": query, "documents": documents},

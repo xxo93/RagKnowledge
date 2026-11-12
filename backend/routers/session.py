@@ -9,10 +9,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from errors import ok
-from schemas.chat import SessionCreate, SessionRename
-from services import chat_store
-from services.auth_deps import get_current_user
+from ..errors import ok
+from ..schemas.chat import SessionCreate, SessionRename
+from ..services import chat_store
+from ..services.auth_deps import get_current_user
 
 router = APIRouter(prefix="/api/chat/session", tags=["session"])
 

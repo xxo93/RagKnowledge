@@ -23,10 +23,10 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from config import settings  # noqa: E402
-from agent import replan, dedup  # noqa: E402
+from backend.config import settings  # noqa: E402
+from backend.agent import replan, dedup  # noqa: E402
 
 _LIVE = os.environ.get("REPLAN_LIVE") == "1"
 _TOOLS = ("knowledge_search", "calculator", "doc_stats")

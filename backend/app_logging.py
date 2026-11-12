@@ -14,7 +14,7 @@ from fastapi import Request, FastAPI
 from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config import settings
+from .config import settings
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
 

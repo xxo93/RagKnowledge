@@ -14,9 +14,9 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from db import get_pool, to_vector
-from config import settings
-from errors import BizError, ERR_DB_UNAVAILABLE, ERR_DOC_NOT_FOUND
+from ..db import get_pool, to_vector
+from ..config import settings
+from ..errors import BizError, ERR_DB_UNAVAILABLE, ERR_DOC_NOT_FOUND
 
 logger = logging.getLogger("rag.vector_store")
 
