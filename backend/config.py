@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.deepseek.com"
     LLM_API_KEY: str = ""                # 未配置时 LLM 生成能力不可用
     LLM_MODEL: str = "deepseek-chat"
+    # WP5-2 模型分级：标题/摘要/事实抽取等轻任务走小模型，回答走主模型。
+    # 小模型为空时自动回落主模型，兼容只配置一个模型的现有环境。
+    LLM_ROUTING_ENABLED: bool = True
+    LLM_SMALL_MODEL: str = ""
+    LLM_SMALL_PURPOSES: str = "summary,memory_extract,title,query_rewrite"
+    # 轻任务可独立指向另一家 OpenAI 兼容服务（如百炼 Qwen）；留空时回落主模型。
+    # 模型名/BaseURL/Key 统一放在 .env，配置中心不再维护模型名，避免两处口径漂移。
+    LLM_SMALL_BASE_URL: str = ""
+    LLM_SMALL_API_KEY: str = ""
+    # N9 多轮检索 query 改写：只影响知识库检索与 rerank，关闭后完全回到原句
+    QUERY_REWRITE_ENABLED: bool = True
+    QUERY_REWRITE_TIMEOUT_MS: int = 5000
     LLM_TIMEOUT: int = 60
     # 生成参数：可在「配置中心」在线调整，这里是 .env / 代码默认值
     LLM_TEMPERATURE: float = 0.3
@@ -87,7 +99,7 @@ class Settings(BaseSettings):
     HNSW_MAX_SCAN_TUPLES: int = 20000
 
     # ---------- Agent ----------
-    HISTORY_ROUNDS: int = 5              # 最近 N 轮（一问一答为一轮）
+    HISTORY_ROUNDS: int = 5              # 旧字段：仅兼容旧调用方（v3 起改用窗口治理参数）
     MAX_TOOL_ROUNDS: int = 3              # 工具循环上限，防止重复回跳死循环
     # assess 后是否允许再规划回跳工具；默认按确定性规则收敛，避免额外 LLM 调用
     MULTI_ROUND_ENABLED: bool = True
@@ -96,6 +108,54 @@ class Settings(BaseSettings):
     # 首问标题是否调用 LLM 提炼；False 时走规则提炼，稳定性优先
     SESSION_TITLE_LLM_ENABLED: bool = False
     SESSION_TITLE_MAX_LEN: int = 16
+
+    # ---------- 会话记忆（M1 / WP1）----------
+    # 窗口治理：轮数上限 + token 预算双闸门，超预算优先保会话事实/摘要、砍原文轮次
+    HISTORY_WINDOW_ROUNDS: int = 8          # 最近 N 轮原文（一问一答 = 1 轮）
+    HISTORY_MAX_TOKENS: int = 3000          # 原文窗口 + 事实 + 摘要的总预算（估算值）
+    HISTORY_TURN_MAX_TOKENS: int = 400      # 单轮 user+assistant 摘要体的 token 上限
+    HISTORY_ANSWER_HEAD_CHARS: int = 300    # answer_digest：保留答案开头字符数
+    HISTORY_ANSWER_TAIL_CHARS: int = 150    # answer_digest：保留答案结尾字符数
+    # 滚动摘要：累计未摘要轮次超过触发值后压缩，保留最近 N 轮不摘要
+    SUMMARY_ENABLED: bool = True
+    SUMMARY_TRIGGER_ROUNDS: int = 12
+    SUMMARY_KEEP_ROUNDS: int = 8            # 硬不变量：必须 >= HISTORY_WINDOW_ROUNDS
+    SUMMARY_MAX_CHARS: int = 400
+    SUMMARY_LLM_ENABLED: bool = True        # False 时用规则摘要（抽取问句/首句），不调模型
+    # 会话事实：异步抽取，同一 (session, kind, key) 只有一条 active
+    SESSION_FACT_ENABLED: bool = True
+    SESSION_FACT_EVERY_ROUNDS: int = 4      # 每 N 轮抽取一次
+    SESSION_FACT_MAX_TOKENS: int = 300      # 单次抽取注入的对话 token 上限
+    SESSION_FACT_MAX_ITEMS: int = 8
+    SESSION_FACT_HISTORY_LIMIT: int = 20         # 注入上下文的事实条数上限
+    SESSION_FACT_MIN_CONFIDENCE: float = 0.6
+    SESSION_FACT_LLM_ENABLED: bool = True   # False 时仅跑规则抽取（离线/评测用）
+
+    # ---------- 会话管理（M8 / WP5-9）----------
+    # 长期无新消息的会话自动归档，避免 200+ 会话把侧栏压垮；0 或负数不归档
+    SESSION_ARCHIVE_DAYS: int = 30
+    # v4 / N1：会话列表默认页大小；前端不传 size 时按该值取
+    SESSION_LIST_PAGE_SIZE: int = 50
+
+    # ---------- 通用对话（M2 / WP2）----------
+    # 一键合规开关：false 时通用意图回落引导话术，不调用模型
+    ALLOW_GENERAL_CHAT: bool = True
+    GENERAL_TEMPERATURE: float = 0.7        # 通用创作温度高于知识库（0.3）
+    # 内部实体词表（逗号分隔）：命中则强制把 general 降级为 knowledge，防止通用能力抢答内部问题
+    INTERNAL_TERMS: str = "报销,审批,员工手册,组织架构,内部制度,考勤制度,薪资制度"
+
+    # ---------- 工作流 Agent（M4 / WP4）----------
+    # 计划最多步数；超过直接拒绝并要求拆分任务（§6.4 / §6.11-6）
+    WORKFLOW_MAX_STEPS: int = 6
+    WORKFLOW_STEP_TIMEOUT: int = 60          # 单步超时（秒）
+    WORKFLOW_TASK_TIMEOUT: int = 180         # 单任务整体超时（秒）
+    WORKFLOW_AUTO_RUN: bool = False          # 默认先出计划、用户确认后再跑
+    WORKFLOW_PARALLEL: bool = True           # v4/N3：无依赖步骤并行总开关；关闭等同并发 1
+    WORKFLOW_MAX_PARALLEL: int = 2           # v4/N3：并行上限 1–4，1 表示回到串行
+    WORKFLOW_LLM_REFLECT: bool = False       # 默认规则反思，True 时每步多一次 LLM 判断
+    WORKFLOW_MAX_REPLANS: int = 2            # 失败后改计划/降级次数上限
+    WORKFLOW_BUDGET_SECONDS: int = 180       # 单任务时间预算（与整体超时同口径）
+    WORKFLOW_BUDGET_TOKENS: int = 8000       # 展示用预算上限，超时不强制中止
 
     # ---------- SSE 心跳 ----------
     # 流前置阶段（决策 LLM / 向量化 / Rerank）静默期发送 SSE 注释帧 ": ping" 的间隔（秒）；
@@ -153,6 +213,21 @@ class Settings(BaseSettings):
     # 大结果导出的落盘目录（相对项目根）与下载链接有效期（分钟；0 = 永不过期）
     EXPORT_DIR_NAME: str = "data/exports"
     BIZ_EXPORT_TTL_MINUTES: int = 0
+
+    # ---------- 输入输出运行日志（v3 / WP3）----------
+    # 与 operation_log（审计）隔离：这里记录聊天内容，用于排障与质量分析，可配置保留期
+    IO_LOG_ENABLED: bool = True
+    # 保留天数：超期后由定时任务物理清理（默认 90 天）
+    IO_LOG_RETENTION_DAYS: int = 90
+    # 写队列容量：队满丢弃并计数，绝不阻塞问答主链路
+    IO_LOG_QUEUE_MAX: int = 1000
+
+    # ---------- 配额与限流（v3 / WP5-6）----------
+    # 演示环境防止单个用户把 Key 打爆：日 token 上限 + 每分钟请求数限流。
+    # 管理员可在配置中心在线调整；关闭后不做任何拦截。
+    QUOTA_ENABLED: bool = True
+    QUOTA_DAILY_TOKEN_LIMIT: int = 200000
+    QUOTA_RATE_LIMIT_PER_MINUTE: int = 20
 
     # ---------- 文件上传 ----------
     # 单次请求整体上传的硬上限（/docs/upload、/docs/upload/batch 走这条路径）
@@ -228,6 +303,12 @@ class Settings(BaseSettings):
             warnings.append("EMBEDDING_DIM 必须为正整数")
         if self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
             warnings.append("CHUNK_OVERLAP 应小于 CHUNK_SIZE，否则切片退化为重复窗口")
+        if self.SUMMARY_KEEP_ROUNDS < self.HISTORY_WINDOW_ROUNDS:
+            warnings.append(
+                "SUMMARY_KEEP_ROUNDS 应不小于 HISTORY_WINDOW_ROUNDS，否则摘要水位与原文窗口重叠，最近上下文会丢"
+            )
+        if self.SUMMARY_TRIGGER_ROUNDS <= self.SUMMARY_KEEP_ROUNDS:
+            warnings.append("SUMMARY_TRIGGER_ROUNDS 应大于 SUMMARY_KEEP_ROUNDS，否则摘要永不触发")
         return warnings
 
 

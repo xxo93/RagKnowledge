@@ -70,7 +70,14 @@ def _done_label(tool_name: str, result_count: Optional[int], detail: Optional[di
 
 # ---------------- 节点 ----------------
 async def plan_node(state: AgentState) -> dict:
-    """执行意图决策；同步决策调用放入线程，避免阻塞事件循环。"""
+    """执行意图决策；同步决策调用放入线程，避免阻塞事件循环。
+
+    v3 / WP2：路由层可以预计算 decision（需异步取内部词表），此时直接复用，
+    避免同一问题重复调用模型分类。
+    """
+    preset = state.get("decision")
+    if preset:
+        return {"decision": preset}
     decision = await asyncio.to_thread(decision_mod.decide, state.get("query", ""))
     return {"decision": decision}
 
@@ -439,10 +446,13 @@ async def run_once(
     history: list[dict] | None = None,
     on_event: EventSink = None,
     user: dict | None = None,
+    decision: dict | None = None,
 ) -> dict:
     """非流式执行完整状态图，返回最终状态字典；on_event 可选接收工具生命周期事件。"""
     graph = get_graph()
-    return await graph.ainvoke(initial_state(query, history, event_sink=on_event, user=user))
+    return await graph.ainvoke(
+        initial_state(query, history, event_sink=on_event, user=user, decision=decision)
+    )
 
 
 async def run_stream(

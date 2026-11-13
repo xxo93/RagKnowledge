@@ -119,20 +119,34 @@ async def retrieve(query: str, doc_ids: list[int] | None = None) -> list[dict]:
     return results
 
 
-def build_prompt(hits: list[dict], query: str, history: list[dict]) -> list[dict]:
-    """拼装 RAG 消息（架构 §3.2 Prompt 结构）：系统约束 + 参考资料 + 历史 + 当前问题。"""
+def build_prompt(
+    hits: list[dict],
+    query: str,
+    history: list[dict],
+    extra_system: list[str] | None = None,
+    system_prompt: str | None = None,
+) -> list[dict]:
+    """拼装 RAG 消息（架构 §3.2 Prompt 结构）：
+
+    系统约束 → 会话事实 → 滚动摘要 → 参考资料 → 历史原文 → 当前问题。
+    `extra_system` 由 services/memory.build_context 提供（事实块、摘要块），
+    放在系统提示之后、参考资料之前，符合 v3 §3.1 的固定注入顺序。
+    `system_prompt` 由 prompt_store 解析（WP5-7 版本化/灰度）；为空时回落到代码默认。
+    """
     from ..prompts import RAG_SYSTEM_PROMPT
 
     context = "\n\n".join(
         f"[{i + 1}]《{h['doc_name']}》片段 #{h['chunk_index']}（相似度 {h['score']:.2f}）\n{h['content']}"
         for i, h in enumerate(hits)
     )
-    return [
-        {"role": "system", "content": RAG_SYSTEM_PROMPT},
-        {"role": "system", "content": f"【参考资料】\n{context}"},
-        *history,
-        {"role": "user", "content": query},
-    ]
+    messages: list[dict] = [{"role": "system", "content": system_prompt or RAG_SYSTEM_PROMPT}]
+    for block in extra_system or []:
+        if block:
+            messages.append({"role": "system", "content": block})
+    messages.append({"role": "system", "content": f"【参考资料】\n{context}"})
+    messages.extend(history)
+    messages.append({"role": "user", "content": query})
+    return messages
 
 
 async def answer(query: str, history: list[dict] | None = None) -> RagResult:
@@ -152,7 +166,11 @@ async def answer(query: str, history: list[dict] | None = None) -> RagResult:
 
 
 async def stream_answer(
-    hits: list[dict], query: str, history: list[dict] | None = None
+    hits: list[dict],
+    query: str,
+    history: list[dict] | None = None,
+    extra_system: list[str] | None = None,
+    system_prompt: str | None = None,
 ) -> AsyncIterator[str]:
     """命中片段的 LLM 流式答案生成（M4 token 事件来源）。
 
@@ -164,11 +182,11 @@ async def stream_answer(
         yield NO_RESULT_FALLBACK
         return
 
-    messages = build_prompt(hits, query, history or [])
+    messages = build_prompt(hits, query, history or [], extra_system, system_prompt)
     try:
         from ..llm import chat_stream
 
-        async for token in chat_stream(messages):
+        async for token in chat_stream(messages, purpose="answer"):
             yield token
     except Exception as exc:  # noqa: BLE001 - 降级，不击穿 SSE
         logger.warning("LLM 流式生成失败，降级为来源摘要：%s", exc)
@@ -176,6 +194,41 @@ async def stream_answer(
         for i, h in enumerate(hits[:3]):
             snippet = (h.get("snippet") or "").strip()[:120]
             yield f"\n[参考{i + 1}]《{h['doc_name']}》#{h.get('chunk_index')}：{snippet}"
+
+
+async def stream_general(
+    query: str,
+    history: list[dict] | None = None,
+    temperature: float | None = None,
+    system_prompt: str | None = None,
+) -> AsyncIterator[str]:
+    """通用对话直答（v3 / WP2）：不检索、不注入内部事实/摘要，直接流式生成。
+
+    - 系统提示固定为 `GENERAL_SYSTEM_PROMPT`，明确禁止编造企业内部数据/制度/金额/人名；
+    - 保留最近对话原文用于上下文连贯（"再改短一点"这类追问），但不注入会话事实与摘要，
+      避免把内部资料带进"未使用内部资料"的回答；
+    - LLM 不可用属于本轮失败：抛出 BizError，由 SSE 层发 error 帧并落 status=error 日志；
+      其余非致命异常才降级为可读话术。
+    """
+    from ..prompts import GENERAL_SYSTEM_PROMPT
+    from ..errors import BizError, ERR_LLM_UNAVAILABLE
+
+    messages: list[dict] = [{"role": "system", "content": system_prompt or GENERAL_SYSTEM_PROMPT}]
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": query})
+    try:
+        from ..llm import chat_stream
+
+        async for token in chat_stream(messages, temperature=temperature, purpose="answer"):
+            yield token
+    except BizError as exc:
+        logger.warning("通用对话生成失败：%s", exc)
+        if exc.code == ERR_LLM_UNAVAILABLE:
+            raise
+        yield LLM_UNAVAILABLE_MSG
+    except Exception as exc:  # noqa: BLE001 - 非模型不可用不击穿 SSE
+        logger.warning("通用对话生成失败：%s", exc)
+        yield LLM_UNAVAILABLE_MSG
 
 
 def web_sources(items: list[dict]) -> list[dict]:
@@ -228,7 +281,7 @@ async def stream_web_answer(
     try:
         from ..llm import chat_stream
 
-        async for token in chat_stream(messages):
+        async for token in chat_stream(messages, purpose="answer"):
             yield token
     except Exception as exc:  # noqa: BLE001 - 不击穿 SSE
         logger.warning("联网兜底答案生成失败，降级为结果摘要：%s", exc)

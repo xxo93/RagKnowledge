@@ -60,13 +60,23 @@ def test_defaults_when_no_override(env):
     assert labels == {
         "retrieval": "检索",
         "generation": "生成",
+        "general": "通用对话",
+        "memory": "会话记忆",
+        "session": "会话管理",
+        "quota": "配额与限流",
         "upload": "上传",
         "fallback": "兜底",
         "biz": "业务库",
+        "logs": "运行日志",
+        "workflow": "任务编排",
     }
 
     params = {p["key"]: p for g in snap["groups"] for p in g["params"]}
-    assert len(params) == 27
+    assert len(params) == 62
+    assert params["SESSION_LIST_PAGE_SIZE"]["current"] == 50
+    assert params["SESSION_TITLE_LLM_ENABLED"]["current"] is False
+    assert params["WORKFLOW_MAX_PARALLEL"]["current"] == 2
+    assert params["WORKFLOW_PARALLEL"]["current"] is True
     # 默认值来自 settings（.env 调过则跟随 .env，这里只断言"等于默认且未标记覆盖"）
     for key, item in params.items():
         assert item["current"] == item["default"], key
@@ -74,6 +84,8 @@ def test_defaults_when_no_override(env):
     assert params["RETRIEVAL_MIN_SCORE"]["current"] == pytest.approx(0.5)
     assert params["RETRIEVAL_CANDIDATES"]["current"] == 20
     assert params["TOP_K"]["current"] == 5
+    assert params["QUERY_REWRITE_ENABLED"]["current"] is True
+    assert params["QUERY_REWRITE_TIMEOUT_MS"]["current"] == 5000
     # 上传组（M2 接入）5 项：单片/总上限、默认分块、默认并发、过期清理
     assert params["UPLOAD_CHUNK_MAX_MB"]["current"] == 32
     assert params["UPLOAD_TOTAL_MAX_MB"]["current"] == 100

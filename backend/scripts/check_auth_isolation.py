@@ -60,8 +60,8 @@ async def main() -> int:
         await chat_store.insert_record(admin_sid, "admin-question", "admin-answer")
 
         # ---------------- 列表隔离 ----------------
-        _, admin_list = await chat_store.list_sessions(admin_id)
-        _, member_list = await chat_store.list_sessions(member_id)
+        _, admin_list, _, _ = await chat_store.list_sessions(admin_id)
+        _, member_list, _, _ = await chat_store.list_sessions(member_id)
 
         check("admin 列表包含 admin 会话",
               any(s["session_id"] == admin_sid for s in admin_list))

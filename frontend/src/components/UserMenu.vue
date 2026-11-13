@@ -2,8 +2,9 @@
 // 顶栏用户区：头像 + 昵称 + 下拉（个人设置 / 修改密码 / 退出登录）。
 // 个人设置：身份卡 + 昵称可编辑 + 账号信息表 + 权限说明。
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { updateProfile } from '../api/auth'
+import { exportMyLogs, deleteMyLogs } from '../api/ioLogs'
 
 const props = defineProps({
   user: { type: Object, required: true }
@@ -86,6 +87,45 @@ function openPasswordFromProfile() {
   profileVisible.value = false
   emit('password')
 }
+
+// ---- 数据与隐私（v3 / WP3 §5.6）：导出/删除本人运行日志 ----
+const exportingLogs = ref(false)
+const deletingLogs = ref(false)
+
+async function onExportLogs() {
+  if (exportingLogs.value) return
+  exportingLogs.value = true
+  try {
+    await exportMyLogs()
+    ElMessage.success('已开始下载对话记录 JSON')
+  } catch {
+    // 统一拦截器提示
+  } finally {
+    exportingLogs.value = false
+  }
+}
+
+async function onDeleteLogs() {
+  if (deletingLogs.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将物理删除你本人的全部问答运行日志（含问题与回答原文），删除后管理员也无法查到，且不可恢复。确认继续？',
+      '删除我的运行日志',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  deletingLogs.value = true
+  try {
+    const data = await deleteMyLogs()
+    ElMessage.success(`已删除 ${data?.removed ?? 0} 条运行日志`)
+  } catch {
+    // 统一拦截器提示
+  } finally {
+    deletingLogs.value = false
+  }
+}
 </script>
 
 <template>
@@ -156,6 +196,19 @@ function openPasswordFromProfile() {
       <div v-for="row in infoRows" :key="row.label" class="info-row">
         <span class="info-label">{{ row.label }}</span>
         <span class="info-value">{{ row.value }}</span>
+      </div>
+    </div>
+
+    <div class="data-block">
+      <div class="field-head">
+        <span class="field-label">数据与隐私</span>
+        <span class="field-tip">运行日志仅用于排障，默认保留 90 天</span>
+      </div>
+      <div class="data-actions">
+        <el-button size="small" :loading="exportingLogs" @click="onExportLogs">导出我的对话记录（JSON）</el-button>
+        <el-button size="small" type="danger" plain :loading="deletingLogs" @click="onDeleteLogs">
+          删除我的全部日志
+        </el-button>
       </div>
     </div>
 
@@ -335,6 +388,17 @@ function openPasswordFromProfile() {
   padding: 10px 12px;
   border-radius: var(--radius-md, 8px);
   background: var(--primary-light, #ecf5ff);
+}
+
+/* ---- 数据与隐私 ---- */
+.data-block {
+  margin-top: 16px;
+}
+
+.data-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .hint-title {

@@ -86,7 +86,7 @@ async def main() -> int:
             check("A4 memory.load_recent 角色成对且时间正序",
                   roles == ["user", "assistant", "user", "assistant"], f"roles={roles}")
 
-            _, sessions = await chat_store.list_sessions(admin_id)
+            _, sessions, _, _ = await chat_store.list_sessions(admin_id)
             check("A5 会话列表包含临时会话", any(s["session_id"] == tmp_sid for s in sessions))
 
             await chat_store.delete_session(tmp_sid, admin_id)

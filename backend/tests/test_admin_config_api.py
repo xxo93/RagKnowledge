@@ -98,7 +98,7 @@ def test_admin_reads_grouped_snapshot(client: TestClient, monkeypatch, store) ->
     assert resp.status_code == 200
     data = resp.json()["data"]
     groups = {g["key"] for g in data["groups"]}
-    assert groups == {"retrieval", "generation", "upload", "fallback", "biz"}
+    assert groups == {"retrieval", "generation", "general", "memory", "session", "quota", "upload", "fallback", "biz", "logs", "workflow"}
     assert data["priority"] == "app_config > .env > 代码默认"
 
     params = {p["key"]: p for g in data["groups"] for p in g["params"]}

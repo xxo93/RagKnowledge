@@ -4,6 +4,12 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchAppConfig, saveAppConfig, resetAppConfig } from '../api/adminConfig'
+import {
+  fetchPrompts,
+  createPromptVersion,
+  updatePromptGray,
+  activatePromptVersion
+} from '../api/adminPrompts'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -14,6 +20,14 @@ const draft = ref({})
 const saved = ref({})
 const ttl = ref(5)
 const priority = ref('')
+
+// 提示词版本化（WP5-7）：与参数配置分开展示，避免把"改提示词"当成普通参数
+const prompts = ref([])
+const promptLoading = ref(false)
+const promptDialog = ref(false)
+const promptSaving = ref(false)
+const promptEditing = ref(null)
+const promptDraft = ref({ content: '', gray_percent: 100 })
 
 const dirtyKeys = computed(() => {
   const keys = []
@@ -61,6 +75,88 @@ async function load() {
     loadError.value = true
   } finally {
     loading.value = false
+  }
+  loadPrompts()
+}
+
+async function loadPrompts() {
+  promptLoading.value = true
+  try {
+    const data = await fetchPrompts()
+    prompts.value = (data?.items || []).map((p) => ({
+      ...p,
+      view_version: p.current_version
+    }))
+  } catch {
+    // 统一拦截器提示；提示词卡片保持空态，不阻断普通配置
+  } finally {
+    promptLoading.value = false
+  }
+}
+
+async function onPromptGray(p) {
+  try {
+    await updatePromptGray(p.name, p.gray_percent)
+    ElMessage.success(`${p.label}灰度已调整为 ${p.gray_percent}%`)
+    await loadPrompts()
+  } catch {
+    await loadPrompts()
+  }
+}
+
+async function onActivatePrompt(p) {
+  const version = p.view_version
+  if (!version) return
+  try {
+    await ElMessageBox.confirm(
+      `将「${p.label}」切换到 v${version}，并默认 100% 全量生效。历史版本仍保留，可随时回滚。确认继续？`,
+      '切换提示词版本',
+      { type: 'warning', confirmButtonText: '立即切换', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await activatePromptVersion(p.name, version, 100)
+    ElMessage.success(`已切换到 v${version}（100% 生效）`)
+    await loadPrompts()
+  } catch {
+    await loadPrompts()
+  }
+}
+
+function currentContent(p) {
+  const version = p.versions?.find((v) => v.version === p.current_version)
+  return version?.content || ''
+}
+
+function openNewPrompt(p) {
+  promptEditing.value = p
+  promptDraft.value = { content: currentContent(p), gray_percent: 100 }
+  promptDialog.value = true
+}
+
+async function submitNewPrompt() {
+  if (!promptEditing.value || promptSaving.value) return
+  const content = promptDraft.value.content.trim()
+  if (!content) {
+    ElMessage.warning('提示词内容不能为空')
+    return
+  }
+  promptSaving.value = true
+  try {
+    const result = await createPromptVersion(
+      promptEditing.value.name,
+      content,
+      promptDraft.value.gray_percent
+    )
+    promptDialog.value = false
+    ElMessage.success(`已发布 v${result.version}，灰度 ${result.gray_percent}%`)
+    await loadPrompts()
+  } catch {
+    // 统一拦截器提示；保留弹窗内容便于修改
+  } finally {
+    promptSaving.value = false
   }
 }
 
@@ -137,7 +233,7 @@ onMounted(load)
       <div class="head-text">
         <h2 class="page-title">配置中心</h2>
         <p class="page-desc">
-          在线调整检索、生成、上传与兜底参数，保存后立即刷新缓存、新请求即生效（无需重启）。
+          在线调整检索、生成、会话记忆与归档、配额限流、上传与兜底参数，保存后立即刷新缓存、新请求即生效（无需重启）。
           取值优先级：{{ priority }}；密钥类参数（API Key / 数据库连接串）不在本页维护。
         </p>
       </div>
@@ -161,6 +257,72 @@ onMounted(load)
     />
 
     <!-- 逐行已有「未保存」标签 + 原值提示，这里不再重复一条全局提示条 -->
+
+    <!-- 提示词版本化（WP5-7）：独立卡片，支持灰度、发版与回滚 -->
+    <div class="group-card prompt-card">
+      <div class="group-head">
+        <div>
+          <div class="group-title">提示词版本</div>
+          <div class="prompt-head-desc">
+            回答/记忆链路实际使用的系统提示。灰度按用户稳定分桶，未命中灰度的用户自动回落上一版本；改错可一键切回历史版本。
+          </div>
+        </div>
+        <el-button link type="primary" size="small" :loading="promptLoading" @click="loadPrompts">
+          刷新版本
+        </el-button>
+      </div>
+
+      <div v-if="promptLoading && !prompts.length" class="prompt-empty">正在读取提示词版本…</div>
+      <div v-else-if="!prompts.length" class="prompt-empty">暂无提示词版本数据</div>
+
+      <div v-for="p in prompts" :key="p.name" class="prompt-row">
+        <div class="prompt-info">
+          <div class="prompt-title">
+            {{ p.label }}
+            <el-tag size="small" effect="plain">v{{ p.current_version }}</el-tag>
+            <el-tag size="small" type="success" effect="plain">当前</el-tag>
+            <el-tag v-if="p.gray_percent < 100" size="small" type="warning" effect="plain">
+              灰度 {{ p.gray_percent }}%
+            </el-tag>
+            <el-tag v-else size="small" type="info" effect="plain">全量</el-tag>
+          </div>
+          <div class="prompt-desc">{{ p.desc }}</div>
+          <div class="prompt-meta">
+            {{ p.name }} · 共 {{ p.versions.length }} 个版本 · 灰度按 user_id 稳定分桶
+          </div>
+        </div>
+
+        <div class="prompt-control">
+          <div class="gray-line">
+            <span class="gray-label">灰度</span>
+            <el-slider
+              v-model="p.gray_percent"
+              :min="0"
+              :max="100"
+              :step="10"
+              :show-tooltip="false"
+              class="gray-slider"
+              @change="onPromptGray(p)"
+            />
+            <span class="gray-value">{{ p.gray_percent }}%</span>
+          </div>
+          <div class="version-line">
+            <el-select v-model="p.view_version" size="small" class="version-select">
+              <el-option
+                v-for="v in p.versions"
+                :key="v.version"
+                :label="`v${v.version}${v.is_active ? '（当前）' : ''}`"
+                :value="v.version"
+              />
+            </el-select>
+            <el-button size="small" :disabled="!p.view_version" @click="onActivatePrompt(p)">
+              启用该版本
+            </el-button>
+            <el-button size="small" type="primary" @click="openNewPrompt(p)">发新版本</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div v-for="group in groups" :key="group.key" class="group-card">
       <div class="group-head">
@@ -226,6 +388,37 @@ onMounted(load)
     </div>
 
     <div v-if="!loading && !groups.length && !loadError" class="empty-tip">暂无可配置参数</div>
+
+    <el-dialog
+      v-model="promptDialog"
+      :title="`发布新版本 · ${promptEditing?.label || ''}`"
+      width="760px"
+      destroy-on-close
+    >
+      <div class="prompt-dialog-tip">
+        新版本会立即成为当前版本；默认 100% 全量生效。想先小范围验证，可把灰度调到 10–50%，命中灰度的用户走新版本，其余用户继续用上一版本。
+      </div>
+      <el-input
+        v-model="promptDraft.content"
+        type="textarea"
+        :rows="14"
+        resize="vertical"
+        maxlength="8000"
+        show-word-limit
+        class="prompt-textarea"
+      />
+      <div class="dialog-gray-line">
+        <span>灰度比例</span>
+        <el-slider v-model="promptDraft.gray_percent" :min="0" :max="100" :step="10" class="gray-slider" />
+        <span class="gray-value">{{ promptDraft.gray_percent }}%</span>
+      </div>
+      <template #footer>
+        <el-button @click="promptDialog = false">取消</el-button>
+        <el-button type="primary" :loading="promptSaving" @click="submitNewPrompt">
+          发布并设为当前版本
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -274,6 +467,132 @@ onMounted(load)
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+
+/* 提示词版本卡片：与普通参数行区分，突出"可灰度/可回滚" */
+.prompt-card .group-head {
+  align-items: flex-start;
+}
+
+.prompt-head-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 680px;
+}
+
+.prompt-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 16px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.prompt-row:last-child {
+  border-bottom: none;
+}
+
+.prompt-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.prompt-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.prompt-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.prompt-control {
+  width: 320px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gray-line,
+.dialog-gray-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gray-label,
+.dialog-gray-line > span:first-child {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.gray-slider {
+  flex: 1;
+  min-width: 120px;
+}
+
+.gray-value {
+  flex: 0 0 38px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.version-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.version-select {
+  width: 130px;
+}
+
+.prompt-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.prompt-dialog-tip {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.prompt-textarea :deep(.el-textarea__inner) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dialog-gray-line {
+  margin-top: 14px;
 }
 
 .group-head {
@@ -391,18 +710,24 @@ onMounted(load)
 }
 
 @media (max-width: 720px) {
-  .param-row {
+  .param-row,
+  .prompt-row {
     flex-direction: column;
     gap: 10px;
   }
 
-  .param-control {
+  .param-control,
+  .prompt-control {
     width: 100%;
     align-items: flex-start;
   }
 
   .param-key {
     text-align: left;
+  }
+
+  .version-line {
+    flex-wrap: wrap;
   }
 }
 </style>

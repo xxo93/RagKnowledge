@@ -76,6 +76,7 @@ def llm_replan_decision(state: dict) -> dict | None:
                 },
             ],
             json_mode=True,
+            purpose="replan",
         )
         data = json.loads(raw or "{}")
         tool = data.get("next_tool") or data.get("tool")

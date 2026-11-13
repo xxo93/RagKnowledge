@@ -6,6 +6,8 @@ import { ElMessage } from 'element-plus'
 import DocsView from './views/DocsView.vue'
 import UsersView from './views/UsersView.vue'
 import ConfigView from './views/ConfigView.vue'
+import IoLogView from './views/IoLogView.vue'
+import WorkflowView from './views/WorkflowView.vue'
 import ChatView from './views/ChatView.vue'
 import LoginView from './views/LoginView.vue'
 import StatusDots from './components/StatusDots.vue'
@@ -49,11 +51,12 @@ const statusLoading = ref(false)
 let statusTimer = null
 
 const menus = computed(() => {
-  const list = [{ key: 'chat', label: '智能对话' }]
+  const list = [{ key: 'chat', label: '智能对话' }, { key: 'workflow', label: '任务中心' }]
   if (user.value && user.value.role === 'admin') {
     list.push({ key: 'docs', label: '知识库管理' })
     list.push({ key: 'users', label: '用户管理' })
     list.push({ key: 'config', label: '配置中心' })
+    list.push({ key: 'io-logs', label: '运行日志' })
   }
   return list
 })
@@ -314,6 +317,8 @@ async function onPasswordDialogClosed() {
     <el-main :class="['app-main', { 'chat-mode': current === 'chat' }]">
       <UsersView v-if="current === 'users' && user.role === 'admin'" :current-user-id="user.user_id" />
       <ConfigView v-else-if="current === 'config' && user.role === 'admin'" />
+      <IoLogView v-else-if="current === 'io-logs' && user.role === 'admin'" />
+      <WorkflowView v-else-if="current === 'workflow'" />
       <DocsView v-else-if="current === 'docs' && user.role === 'admin'" />
       <ChatView v-else :current-user="user" />
     </el-main>

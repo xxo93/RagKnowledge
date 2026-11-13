@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,31 @@ class SessionRename(BaseModel):
     session_name: str = Field(min_length=1, max_length=128)
 
 
+class SessionPinUpdate(BaseModel):
+    """置顶开关（M8 / WP5-9）。"""
+
+    pinned: bool
+
+
+class SessionArchiveUpdate(BaseModel):
+    """归档/恢复开关（M8 / WP5-9）。"""
+
+    archived: bool = True
+
+
+class SessionBatchAction(BaseModel):
+    """v4 / N6：批量置顶/归档/恢复；不含删除。"""
+
+    action: Literal["pin", "unpin", "archive", "restore"]
+    session_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class MemorySettings(BaseModel):
+    """会话记忆开关（临时会话 = memory_enabled false）。"""
+
+    memory_enabled: bool
+
+
 class SessionItem(BaseModel):
     session_id: int
     session_name: str
@@ -24,6 +49,18 @@ class SessionItem(BaseModel):
 class ChatStreamRequest(BaseModel):
     session_id: int
     query: str = Field(min_length=1, max_length=2000)
+    # v3 / WP2：模式选择器。auto＝按意图自动路由；knowledge＝仅知识库；general＝仅通用；
+    # biz＝业务库；workflow＝任务（WP4 开放，本期固定提示）
+    mode: str = Field(default="auto", pattern="^(auto|knowledge|general|biz|workflow)$")
+
+
+class FeedbackCreate(BaseModel):
+    """用户对一条回答的赞/踩反馈（v3 / WP5-3）。"""
+
+    record_id: int
+    rating: Literal[1, -1] = Field(description="1=有帮助，-1=需改进")
+    reason_code: str | None = Field(default=None, max_length=32)
+    reason_text: str | None = Field(default=None, max_length=500)
 
 
 class RecordItem(BaseModel):

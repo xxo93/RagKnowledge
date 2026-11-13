@@ -8,10 +8,14 @@ from typing import Awaitable, Callable, Optional, TypedDict
 
 
 class Decision(TypedDict, total=False):
-    """plan 节点的结构化意图判断结果。"""
-    tool: Optional[str]            # knowledge_search / calculator / doc_stats / None
+    """plan 节点的结构化意图判断结果（v3 / WP2 扩到 7 类意图）。"""
+    intent: str                    # knowledge / biz_query / calculator / doc_stats / general / workflow / clarify
+    tool: Optional[str]            # knowledge_search / calculator / doc_stats / biz_query / None
     args: dict
+    confidence: float
     reason: str
+    degraded_reason: Optional[str]  # general 被内部事实保护强制降级为 knowledge 的原因
+    suppressed_intent: Optional[str]  # 显式"仅知识库"模式下被压制的通用意图
 
 
 class Observation(TypedDict, total=False):
@@ -66,14 +70,19 @@ def initial_state(
     history: list[dict] | None = None,
     event_sink: Optional[Callable[[dict], Awaitable[None]]] = None,
     user: dict | None = None,
+    decision: Optional[Decision] = None,
 ) -> AgentState:
-    """构造初始状态（round=0，其余列表为空）。"""
+    """构造初始状态（round=0，其余列表为空）。
+
+    decision 可由路由层预计算后传入（v3 / WP2 的显式模式与内部事实保护需要异步取词表），
+    plan 节点检测到已有决策时直接复用，不再调用一次模型。
+    """
     return AgentState(
         query=query,
         history=history or [],
         user=user or {},
         round=0,
-        decision=None,
+        decision=decision,
         observations=[],
         tool_calls=[],
         sources=[],

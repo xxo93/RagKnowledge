@@ -19,12 +19,16 @@ ERR_FILE_SIZE = 40003         # 文件超限
 ERR_DOC_NOT_FOUND = 40401
 ERR_SESSION_NOT_FOUND = 40402
 ERR_USER_NOT_FOUND = 40403
+ERR_TRACE_NOT_FOUND = 40405  # 运行日志 trace 不存在或不属于当前用户
+ERR_RECORD_NOT_FOUND = 40406  # 回答记录不存在或不属于当前用户（反馈/导出）
 ERR_UNAUTHORIZED = 40101       # 未登录或登录态失效
 ERR_FORBIDDEN = 40303          # 已登录但无角色权限
 ERR_USER_EXISTS = 40004        # 用户名已存在 / 账号规则冲突
 ERR_DB_UNAVAILABLE = 50001   # 数据库连接池耗尽 / 连接中断
 ERR_LLM_UNAVAILABLE = 50002  # LLM 超时 / 鉴权失败
 ERR_INGEST_FAILED = 50003     # 文档解析 / 切片 / 向量化失败
+ERR_QUOTA_EXCEEDED = 42901    # 每用户日 token 配额耗尽
+ERR_RATE_LIMITED = 42902      # 每用户每分钟请求数超限
 
 
 class BizError(Exception):

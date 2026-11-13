@@ -269,6 +269,7 @@ def llm_recognize(query: str, candidates: list[dict]) -> Optional[dict]:
             ],
             json_mode=True,
             temperature=0.0,
+            purpose="intent",
         )
         data = json.loads(raw or "{}")
         intent_id = data.get("intent")

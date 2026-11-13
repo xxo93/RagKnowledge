@@ -4,14 +4,17 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { filterCommands } from '../config/chatCommands'
+import ModeSelector from './ModeSelector.vue'
 
 const props = defineProps({
   streaming: { type: Boolean, default: false },
   sessionId: { type: [Number, String, null], default: null },
-  draft: { type: String, default: '' }
+  draft: { type: String, default: '' },
+  // v3 / WP2：回答模式（auto / knowledge / general / biz / workflow）
+  mode: { type: String, default: 'auto' }
 })
 
-const emit = defineEmits(['send', 'stop', 'update:draft'])
+const emit = defineEmits(['send', 'stop', 'update:draft', 'update:mode'])
 const MAX_LEN = 500
 const SOFT_LEN = 400
 // 8 行：业务库查询模板本身就带日期区间和筛选条件，6 行容易滚动到看不见开头
@@ -173,6 +176,11 @@ function onPaste(e) {
     />
     <div class="input-footer">
       <div class="footer-left">
+        <ModeSelector
+          :model-value="props.mode"
+          :disabled="props.streaming"
+          @update:model-value="emit('update:mode', $event)"
+        />
         <button type="button" class="cmd-trigger" title="插入斜杠命令" @click="openCommands">/ 命令</button>
         <span
           class="char-count"
@@ -273,7 +281,8 @@ function onPaste(e) {
 .footer-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 
