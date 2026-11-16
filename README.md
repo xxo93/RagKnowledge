@@ -1,48 +1,67 @@
 # RagKnowledge · 企业文档智能问答 Agent（RAG + LangGraph 工具 Agent）
 
-面向简历展示与本地运行的私有文档知识库 + 多工具 Agent Demo：覆盖 RAG 全链路（解析→清洗→切片→向量化→检索→生成→引用溯源）与 LangGraph 三工具 Agent（知识库检索 / 数学计算 / 文档统计），SSE 流式输出、会话历史持久化。
+面向企业内网的私有文档知识库 + 多工具 Agent：覆盖 RAG 全链路（解析→清洗→切片→向量化→检索→生成→引用溯源）与 LangGraph 多工具 Agent（知识库检索 / 数学计算 / 文档统计 / 业务库查询），支持多轮追问改写、三层会话记忆、工作流 DAG 并行、SSE 流式输出、多用户隔离与运维治理。
 
-> 设计依据：[需求文档.md](./需求文档.md) V2.1（pgvector 单库版）、[架构设计文档.md](./架构设计文档.md)、[设计方案-多用户隔离与权限模型.md](./设计方案-多用户隔离与权限模型.md)。
-> 当前阶段：**M0–M6 主链路 + 多用户隔离与权限模型（P1–P5）完成（截至 V56）**：PG17 + pgvector 四表与 `vector(1024)` HNSW；上传解析切片入库、向量检索、LangGraph 三工具 Agent、SSE 流式与会话落库、双页面 UI 均已接通；已接入真实 Rerank（gte-rerank-v2，复用 Embedding Key、失败降级原序）、SSE 前置准备 + token 期心跳、工具调用防重复键、来源卡并列展示重排/相似度分；动态多轮再规划默认关闭、经开关门控与单次真实再决策轻测（V51）；小规模双模式复评显示 Rerank 首名增益持平、阈值维持 0.0（V52）；轻量离线 CI、本地回归脚本与《运维与回归手册》就位（V53）；后端重解析刷新向量与 HNSW REINDEX 能力就位（V54）；服务端批量聚合接口、文档页重解析/重建索引按钮就位（V55）；**多用户隔离与权限模型（登录态/会话私有/角色鉴权/用户管理/审计）就位（V56）**。逐版本验收见 [交付验收报告.md](./交付验收报告.md)。
+> **当前能力包括**：
+> - PG17 + pgvector 单库与 `vector(1024)` HNSW；
+> - 文档解析切片入库、向量检索、Rerank、阈值过滤与来源溯源；
+> - LangGraph 意图决策与多工具编排；
+> - SSE 流式问答、心跳与中断处理；
+> - 三层会话记忆与事实版本历史；工作流 DAG 并行执行；
+> - 会话游标分页、虚拟滚动、搜索防抖与批量操作；
+> - 双模型路由与 query 改写；
+> - 多用户隔离、角色鉴权、配额限流与运行日志。
 
 ## 一、技术栈
 
 | 层 | 技术 |
 | --- | --- |
-| 前端 | Vue3 + Element Plus + Vite（fetch 手写 SSE 解析） |
-| 后端 | Python FastAPI + Uvicorn，分层单体（路由/服务/Agent/基础设施） |
-| Agent | LangGraph 状态图 + 循环上限（默认 3 轮） |
-| 存储 | PostgreSQL 16/17 + pgvector，业务表与向量表同库同事务，HNSW 余弦索引 |
-| Embedding | 当前 = 方案② API 托管：百炼 `text-embedding-v3`（默认 1024 维，OpenAI 兼容 `/embeddings`，单批 ≤10，匹配 `vector(1024)`）；本地 BGE / Ollama 为预留分支，适配器模式可切换 |
-| LLM | OpenAI 兼容协议（DeepSeek 默认，可切豆包 / 通义 / OpenAI） |
-| Rerank | 百炼 `gte-rerank-v2`（原生 text-rerank 端点，复用 Embedding Key；`RERANK_ENABLED` 开关，失败降级原序） |
+| 前端 | Vue3 + Element Plus + Vite；`fetch` 手写 SSE 解析，`@tanstack/vue-virtual` 处理大会话列表 |
+| 后端 | Python FastAPI + Uvicorn，分层单体（路由/服务/Agent/领域能力/基础设施） |
+| Agent | LangGraph 状态图；7 类意图、4 个工具、循环上限 3 轮、工具去重与失败收敛 |
+| 存储 | PostgreSQL 17 + pgvector，业务数据、向量、会话、记忆、日志、配置同库；HNSW 余弦索引 |
+| Embedding | 百炼 `text-embedding-v3`，默认 1024 维，OpenAI 兼容 `/embeddings`，单批 ≤10，匹配 `vector(1024)`；本地 BGE / Ollama 为适配器预留分支 |
+| LLM | 主模型 DeepSeek `deepseek-chat`（OpenAI 兼容协议）；小模型 Qwen `qwen3.6-flash` 负责摘要、事实抽取、标题与 query 改写，失败回落主模型 |
+| Rerank | 百炼 `gte-rerank-v2`（原生 text-rerank 端点，复用百炼 Key；`RERANK_ENABLED` 开关，失败降级原序） |
 
-已纳入：**登录鉴权与多用户隔离**（服务端 Cookie Session、admin/member 角色、会话按用户私有、操作审计；见 [设计方案-多用户隔离与权限模型.md](./设计方案-多用户隔离与权限模型.md)）。
-明确不做：Docker 化项目、部署发布、异步队列、OCR、Milvus 集群、OAuth/SSO、细粒度 RBAC（见需求文档 §十一）；现有仅为不接数据库/密钥的轻量离线 CI，说明见第六节与 [运维与回归手册.md](./运维与回归手册.md)。
+已纳入：**登录鉴权与多用户隔离**（HttpOnly Cookie Session、admin/member 角色、会话按用户私有、操作审计）。
+
+**暂时未做**：Docker 化项目、部署发布、异步队列、OCR、Milvus 集群、OAuth/SSO、细粒度 RBAC；现有轻量离线 CI 不接数据库、密钥与发布流程。
 
 ## 二、目录结构
 
 ```
 RagKnowledge/
-├── 需求文档.md / 架构设计文档.md
+├── 文档/                       # 项目文档（按类型归档）
+│   ├── 需求与设计/             # 需求、设计与技术复盘
+│   ├── 验收报告/               # 阶段、M/P、V4-1~V4-3 验收
+│   ├── 开发运维指南/           # 安装、开发与运维说明
+│   └── 测试与质量/             # 审计、排查与测试修复
 ├── README.md / .env.example / .gitignore
 ├── backend/
 │   ├── main.py                 # FastAPI 入口（lifespan、CORS、路由注册、全局异常）
 │   ├── config.py               # Pydantic Settings 统一配置
-│   ├── db.py                   # 异步连接池 + register_vector + to_vector 包装(ADR-006)
+│   ├── db.py                   # 异步连接池 + register_vector + to_vector 包装
 │   ├── errors.py / app_logging.py / llm.py / prompts.py
-│   ├── init_db.sql             # DDL（__EMBEDDING_DIM__ 占位符，幂等；含 app_user/auth_session/operation_log）
+│   ├── init_db.sql             # DDL（__EMBEDDING_DIM__ 占位符，幂等）
 │   ├── scripts/init_db.py      # 渲染维度并执行建库建表
-│   ├── scripts/migrate_auth_multitenant.py  # 幂等迁移：建认证/审计表、chat_session.user_id、初始 admin
-│   ├── schemas/ routers/ services/ agent(tools)/ tests/
-│   │   ├── services/security.py / account_store.py / auth_deps.py / audit.py
-│   │   └── routers/auth.py / admin.py
-├── frontend/                   # Vue3：api(sse/admin)、composables、views(Chat/Docs/Users/Login)、components
-├── .github/workflows/ci.yml    # 轻量离线 CI：后端单测/装配 + 前端构建（不接 DB/密钥/发布）
+│   ├── scripts/migrate_auth_multitenant.py  # 幂等迁移：认证/审计表、会话归属、初始管理员
+│   ├── schemas/                # 请求/响应模型
+│   ├── routers/                # auth/chat/session/docs/workflow/biz/admin/system 等
+│   ├── services/               # ingest/rag/memory/workflow/query_rewrite/session_title
+│   │   └── ...                 # chat_store/vector_store/account_store/prompt_store/app_config
+│   ├── agent/                  # state/decision/graph/replan/dedup/tools
+│   └── tests/                  # 单元、集成与回归测试
+├── frontend/                   # Vue3：api、composables、views、components
+│   ├── src/api/                # http/sse/chat/docs/auth/admin/workflow
+│   ├── src/composables/        # useChat/useStreamRender/useTypewriter
+│   └── src/views/              # Chat/Docs/Users/Login/Config/IoLog/Workflow
+├── docs/                       # 界面截图资产（m5-screens / v4-screens）
+├── .github/workflows/ci.yml    # 轻量离线 CI：后端单测/装配 + 前端构建
 └── data/uploads/               # 原始文档留档（不入库）
 ```
 
-分层依赖规则（架构 §2.2）：routers 只做协议；services 做流程；SQL 只出现在 `services/vector_store.py`、`services/chat_store.py`、`services/account_store.py`、`services/audit.py` 与 `db.py`；agent 不直接读写库；外部 LLM/Embedding 只经 `llm.py`/`embedder.py`。
+分层依赖规则：routers 只做协议与响应组装；services 做流程编排与事务边界；SQL 收敛在 `services/vector_store.py`、`services/chat_store.py`、`services/account_store.py`、`services/audit.py` 与 `db.py`；agent 不直接读写数据库；外部 LLM/Embedding 只经 `llm.py`/`embedder.py` 访问。
 
 ## 三、启动与访问（含默认管理员）
 
@@ -153,9 +172,15 @@ npm run dev                                          # http://127.0.0.1:5173
 ### 3.6 接口一览（供调用方参考）
 
 接口文档：<http://127.0.0.1:8000/docs>；健康检查：`GET /health`；配置元信息：`GET /api/system/info`（管理员）。
-认证：`POST /api/auth/login`（HttpOnly Cookie）、`POST /api/auth/logout`、`GET /api/auth/me`、`POST /api/auth/password`。
-文档接口（管理员）：`POST /api/docs/upload`（单文件兼容）、`POST /api/docs/upload/batch`（服务端顺序批量聚合）、`POST /api/docs/{doc_id}/reparse`（重解析替换切片向量）、`POST /api/docs/reindex`（重建 HNSW 索引）、`GET /api/docs/list`、`DELETE /api/docs/{doc_id}`；前端文档页已接入批量上传、重解析与重建索引操作。
-用户管理（管理员）：`GET/POST /api/admin/users`、`PATCH /api/admin/users/{id}/status`、`POST /api/admin/users/{id}/reset-password`；管理员登录后可在顶部「用户管理」页完成列表、新建账号、启用/禁用与重置密码（禁用/重置会立即吊销该账号登录态）。
+
+- 认证：`POST /api/auth/login`（HttpOnly Cookie）、`POST /api/auth/logout`、`GET /api/auth/me`、`POST /api/auth/password`。
+- 问答：`POST /api/chat/stream`（SSE）、`GET /api/chat/record/{session_id}`、`GET /api/chat/session/{session_id}/export`、`GET /api/chat/suggestions`、`POST /api/chat/feedback`。
+- 会话：`POST /api/chat/session`、`GET /api/chat/session/list`、`POST /api/chat/session/batch`、`PATCH /api/chat/session/{id}/pin`、`PATCH /api/chat/session/{id}/archive`、`PATCH /api/chat/session/{id}`、`DELETE /api/chat/session/{id}`。
+- 会话记忆：`GET /api/sessions/{session_id}/memory`、`GET /api/sessions/{session_id}/memory/{fact_id}/history`、`DELETE /api/sessions/{session_id}/memory/facts/{mem_id}`、`PUT /api/sessions/{session_id}/memory/settings`。
+- 工作流：`POST /api/workflow/plan`、`POST /api/workflow/run`、`GET /api/workflow/list`、`GET /api/workflow/{task_id}`、`GET /api/workflow/{task_id}/events`、`POST /api/workflow/{task_id}/confirm`、`POST /api/workflow/{task_id}/cancel`、`POST /api/workflow/{task_id}/pause`、`POST /api/workflow/{task_id}/resume`。
+- 业务查询：`GET /api/biz/intents`、`POST /api/biz/query`。
+- 文档接口（管理员）：`POST /api/docs/upload`（单文件兼容）、`POST /api/docs/upload/batch`（服务端顺序批量聚合）、`POST /api/docs/upload/chunk` / `complete`（分片上传）、`POST /api/docs/{doc_id}/reparse`（重解析替换切片向量）、`POST /api/docs/reindex`（重建 HNSW 索引）、`GET /api/docs/list`、`DELETE /api/docs/{doc_id}`。
+- 用户管理（管理员）：`GET/POST /api/admin/users`、`PATCH /api/admin/users/{id}/status`、`POST /api/admin/users/{id}/reset-password`；管理员登录后可在顶部「用户管理」页完成列表、新建账号、启用/禁用与重置密码（禁用/重置会立即吊销该账号登录态）。
 
 ### 3.7 常见问题
 
@@ -172,23 +197,27 @@ npm run dev                                          # http://127.0.0.1:5173
 
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
-| 骨架 + 服务层 | 目录/配置/契约/纯函数；后端依赖安装与自检；前端依赖安装、`build`、`dev` 与代理联通（阶段1–3） | ✅ 阶段1–3 完成；DB 数据链路见 M0 |
-| M0 | PG + pgvector 环境、建库建表建 HNSW、扩展版本验证、异步连接 `db_ready=true` | ✅ 阶段4完成（PG 17.11 + vector 0.8.6，四表 + `vector(1024)` HNSW；详见报告四点七 / V17–V20） |
-| M1 | 上传解析切片入库单事务链路、文档列表/删除 | ✅（事务入库、FK 级联删除；详见报告 M1/V22–V30） |
-| M2 | 向量检索 SQL + Prompt + LLM 生成 + 引用来源 | ✅（HNSW 余弦检索、阈值过滤、来源结构；V31–V35） |
-| M3 | LangGraph 状态图、三工具、意图路由、循环上限 | ✅（关键词兜底决策、三工具节点、单轮收敛；V36–V40） |
-| M4 | SSE 流式、会话与记录落库、历史回填 | ✅（决策/流式/降级、FK 双保险、落库 saved 标志；V41–V42） |
-| M5 | 两页面 UI 与交互、来源卡片、中断恢复 | ✅（会话管理、token 渲染、来源卡重排分、中断复位；V35–V43） |
-| M6 | 调优、异常兜底、日志、评测与 Rerank | ✅ 基线完成（gte-rerank-v2、Hit@1=1.0 基线、心跳/防重复/HNSW 验证；大语料复评待后续） |
+| 骨架 + 服务层 | 目录、配置、契约、纯函数；后端依赖自检；前端依赖、构建、开发服务与代理联通 | ✅ 完成 |
+| M0 | PG + pgvector 环境、建库建表建 HNSW、扩展版本验证、异步连接 `db_ready=true` | ✅ PG 17.11 + vector 0.8.6，`vector(1024)` HNSW |
+| M1 | 上传解析切片入库单事务链路、文档列表/删除 | ✅ 事务入库、FK 级联删除 |
+| M2 | 向量检索 SQL + Prompt + LLM 生成 + 引用来源 | ✅ HNSW 余弦检索、阈值过滤、来源结构 |
+| M3 | LangGraph 状态图、工具节点、意图路由、循环上限 | ✅ 显式状态图、工具去重、单轮收敛 |
+| M4 | SSE 流式、会话与记录落库、历史回填 | ✅ 决策/流式/降级、落库 saved 标志 |
+| M5 | 两页面 UI 与交互、来源卡片、中断恢复 | ✅ 会话管理、token 渲染、来源卡、中断复位 |
+| M6 | 调优、异常兜底、日志、评测与 Rerank | ✅ gte-rerank-v2、心跳、防重复、HNSW 验证 |
+| M7 | 治理能力：配额与限流、运行日志、配置中心、提示词版本化 | ✅ 62 个运行参数、6 条提示词版本 |
+| M8 | 会话体验与可信度：三层记忆、证据强度、导出与反馈 | ✅ 记忆/摘要/事实链路收口 |
+| v2 / v3 | 通用对话、联网兜底、工作流 Agent、业务库查询与治理增强 | ✅ 全量交付 |
+| v4 | N1–N11：会话规模、标题小模型、工作流并行、归档计数、事实版本历史、批量操作、搜索防抖、小模型审计、query 改写、时间显示、宽度拖拽 | ✅ 全量交付并通过验收 |
 
-> 逐阶段开发与验收记录见 [交付验收报告.md](./交付验收报告.md)。
+> 当前进度以本节为准：主链路、治理能力与 v4 能力增强均已收口。
 
-## 五、关键安全与一致性设计（面试要点）
+## 五、关键安全与一致性设计
 
 - **单库同事务**：切片向量与文档元数据同库，上传 T2 原子入库、删除显式事务清切片，无双写补偿；
 - **SQL 全参数化**：统计工具枚举白名单、计算器正则 + AST 白名单（不使用 eval）；
 - **向量维度三维约束**：模型输出维度 = `EMBEDDING_DIM` = 表列 `vector(N)`，启动与入库双重校验；
-- **向量写入统一 `Vector(...)` 包装**：pgvector-python 未注册 list dumper，直传 list 会报类型错误（ADR-006）；
+- **向量写入统一 `Vector(...)` 包装**：pgvector-python 未注册 list dumper，直传 list 会报类型错误；
 - **服务端强制鉴权**：Cookie 只存不透明令牌，库内只存 `SHA-256(token)`；`get_current_user` / `require_admin` 在 FastAPI 依赖层校验，前端隐藏按钮只是体验优化；
 - **会话私有**：`chat_session.user_id` 归属校验 + 删除前 `SELECT ... FOR UPDATE` 锁定 owner，越权统一 40402，既不泄露存在性也不会误删他人记录；
 - **密码不落明文**：PBKDF2-SHA256（260k 迭代）+ 随机盐；改密/重置/禁用即吊销对应登录态；
@@ -210,7 +239,7 @@ cd frontend
 npm run build                              # 前端生产构建（验证无编译错误）
 ```
 
-> 需要本地 PostgreSQL 但不调用模型、无模型费用的脚本：`check_chat_sse.py`（REAL_LLM 默认 SKIP）、`check_hnsw_index.py`（事务内造数验证 HNSW 计划、结束回滚不污染数据）、`check_auth_isolation.py`（会话归属隔离与越权删除/重命名）、`check_auth_http.py`（认证链路与权限矩阵，临时账号与审计行自动清理）；详细分级与排障见 [运维与回归手册.md](./运维与回归手册.md) 第 4、9 节。
+> 需要本地 PostgreSQL 但不调用模型、无模型费用的脚本：`check_chat_sse.py`（REAL_LLM 默认 SKIP）、`check_hnsw_index.py`（事务内造数验证 HNSW 计划、结束回滚不污染数据）、`check_auth_isolation.py`（会话归属隔离与越权删除/重命名）、`check_auth_http.py`（认证链路与权限矩阵，临时账号与审计行自动清理）。
 
 **联网（按需执行，会产生少量 Embedding / Rerank / LLM 调用费用）**：
 
