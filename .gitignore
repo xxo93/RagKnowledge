@@ -23,8 +23,6 @@ data/uploads/*
 !data/uploads/.gitkeep
 data/exports/
 *.log
-文档/
-文档/*
 
 # ---- 编辑器 / IDE ----
 .idea/
