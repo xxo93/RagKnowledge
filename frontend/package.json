@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/vue-virtual": "^3.13.52",
     "axios": "^1.7.7",
+    "docx-preview": "^0.3.7",
     "dompurify": "^3.4.17",
     "element-plus": "^2.8.0",
     "highlight.js": "^11.12.0",

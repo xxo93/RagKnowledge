@@ -136,9 +136,10 @@ async function readDocError(res) {
   return err
 }
 
-// GET /api/docs/{doc_id}/preview —— 已登录即可；PDF 返回 Blob，其他返回 JSON 可读内容
-export async function fetchDocPreview(docId) {
-  const res = await fetch(`/api/docs/${docId}/preview`, { credentials: 'include' })
+// GET /api/docs/{doc_id}/preview —— 已登录即可；PDF 返回 Blob，DOCX 返回按页渲染字节，其他返回 JSON
+export async function fetchDocPreview(docId, options = {}) {
+  const query = options.forceHtml ? '?html=1' : ''
+  const res = await fetch(`/api/docs/${docId}/preview${query}`, { credentials: 'include' })
   if (!res.ok) throw await readDocError(res)
   const type = res.headers.get('content-type') || ''
   if (type.includes('application/pdf')) {

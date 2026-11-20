@@ -334,10 +334,15 @@ def _parse_date(value: str, field: str) -> Optional[date]:
 
 
 @router.get("/{doc_id}/preview")
-async def preview_doc(doc_id: int, user: dict = Depends(get_current_user)):
+async def preview_doc(
+    doc_id: int,
+    user: dict = Depends(get_current_user),
+    force_html: bool = Query(False, alias="html", description="DOCX/DOC 强制返回语义 HTML 降级预览"),
+):
     """GET /api/docs/{doc_id}/preview —— 已登录用户读取原件预览。
 
-    PDF 直接 inline 返回原文件；其他格式返回 JSON 可读内容（Markdown/文本/表格）。
+    PDF 直接 inline 返回原文件；DOCX/DOC 默认返回按页渲染所需字节；其他格式返回
+    JSON 可读内容（Markdown/HTML/表格）。`?html=1` 强制 DOCX/DOC 走 HTML 降级。
     预览只读，不触发重解析、切片或向量化。
     """
     meta = await vs.get_document_meta(doc_id)
@@ -356,7 +361,7 @@ async def preview_doc(doc_id: int, user: dict = Depends(get_current_user)):
             content_disposition_type="inline",
         )
 
-    data = await run_in_threadpool(preview_service.build_preview, meta)
+    data = await run_in_threadpool(preview_service.build_preview, meta, force_html)
     return ok(data)
 
 

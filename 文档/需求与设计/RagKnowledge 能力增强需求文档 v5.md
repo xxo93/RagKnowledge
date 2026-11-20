@@ -4,7 +4,7 @@
 > 编写日期：2026-11-20
 > 基线：v4 全量交付，V4-1–V4-3 的 N1–N11 已完成；当前 `pytest 284 passed / 1 skipped`
 > 定位：知识库摄取与管理体验增强 + 自然语言任务自主规划
-> 状态：**V5-1、V5-2 已验收（2026-11-20）；V5-3 自主规划待开发**
+> 状态：**V5-1、V5-2 已验收（2026-11-20；V5-2 格式保真与依赖补丁已验收）；V5-3 自主规划待开发**
 
 ---
 
@@ -356,7 +356,7 @@
 | 方法 | 路径 | 权限 | 返回 |
 |---|---|---|---|
 | GET | `/api/docs/{doc_id}/download` | 管理员 | 原文件二进制，`Content-Disposition: attachment` |
-| GET | `/api/docs/{doc_id}/preview` | 已登录用户 | PDF 返回 `application/pdf` inline；其他格式返回 JSON 预览结构 |
+| GET | `/api/docs/{doc_id}/preview` | 已登录用户 | PDF 返回 `application/pdf` inline；DOCX/DOC 返回按页渲染字节；其他格式返回 JSON 预览结构 |
 
 预览返回结构建议：
 
@@ -365,17 +365,22 @@
   "code": 0,
   "msg": "ok",
   "data": {
-    "kind": "markdown | text | sheet",
-    "doc_name": "报销制度.xlsx",
-    "content": "……",
-    "truncated": true,
+    "kind": "docx | markdown | html | sheet",
+    "doc_name": "报销制度.docx",
+    "content": "",
+    "docx_base64": "UEsDBBQ……",
+    "truncated": false,
     "sheets": [
       {
         "name": "差旅报销",
         "headers": ["项目", "上限"],
         "rows": [["住宿", "500"]],
         "total_rows": 120,
-        "truncated": true
+        "truncated": true,
+        "html": "<table>…保留合并单元格、列宽、字体、底色与对齐…</table>",
+        "html_total_rows": 121,
+        "html_truncated": true,
+        "col_widths": [120, 90]
       }
     ]
   }
@@ -384,10 +389,11 @@
 
 - PDF 不走 JSON，直接流式返回原文件，`Content-Disposition: inline`，由前端 `iframe` 打开。
 - Markdown 返回原文或渲染所需文本，前端复用 `MarkdownRenderer`，继续走 `marked + DOMPurify`，禁止原始 HTML 执行。
-- DOCX 返回段落文本和表格文本，`kind=text`；不承诺保留字体、页眉页脚、图片和分栏。
-- `.doc` 复用 R1 的转换结果或临时转换后提取文本，返回 `kind=text`，不承诺版式。
-- CSV 返回 `kind=sheet`，按单表返回表头和前 N 行；工作表名固定为 `CSV`。
-- Excel 返回 `kind=sheet`，按工作表返回表头和前 N 行；不返回合并单元格样式。
+- DOCX 默认返回 `kind=docx` 与 `docx_base64`，前端用 `docx-preview` 在浏览器内按页渲染，保留纸张尺寸、页边距、分页、页眉页脚、表格、图片与字体；单文件上限 6 MB，超过上限或前端渲染失败时改用语义 HTML。
+- `.doc` 复用 R1 的转换结果先转 `.docx`，再按 DOCX 规则返回按页渲染字节；转换器缺失时明确提示下载原件。
+- `GET /api/docs/{doc_id}/preview?html=1` 为 DOCX/DOC 的显式 HTML 降级入口，返回 `kind=html`；保留标题层级、粗体/斜体、列表、表格和正文段落。
+- CSV 返回 `kind=sheet`，按单表返回表头和前 N 行，并附带带列标/行号的基础 HTML 表格；工作表名固定为 `CSV`。
+- Excel 返回 `kind=sheet`，按工作表返回表头与前 N 行；额外返回 `html`，保留合并单元格、列宽、字体、底色、边框、对齐与常见数字格式，并生成 Excel 式列标（A/B/C）与行号列。
 - 其他格式返回 `40002`“该格式暂不支持在线预览，请下载原文件”。
 
 #### R4.4 安全与文件定位
@@ -416,8 +422,9 @@
   - 顶部显示文档名、类型、大小、上传时间、切片数。
   - PDF：`iframe` 内嵌，加载失败显示“无法预览，请下载原件”。
   - Markdown：使用现有 `MarkdownRenderer` 渲染，链接继续只允许 `http/https/mailto`。
-  - DOCX / DOC：等宽字体或普通正文展示提取文本，保留段落空行；表格可用简单 HTML 表格展示。
-  - Excel / CSV：工作表 tab + `el-table` 表格，表头固定，横向可滚动；显示“共 X 行，预览前 100 行”。
+  - DOCX / DOC：前端动态加载 `docx-preview`，按 A4 纸张和原页边距分页渲染，支持缩放、适合宽度与页数提示；渲染容器带纸张阴影和页间距，接近 Word 阅读视图。渲染失败时自动请求 `?html=1` 降级为 `SafeHtml` 语义视图，不直接报错。
+  - Excel / CSV：工作表标签放在底部，表格带 Excel 列标（A/B/C）与行号列，表头与行号 `sticky` 固定；提供缩放、适合宽度，表格区域横向可滚动；显示“共 X 行，预览前 100 行”。
+  - DOCX 在 375 宽度下自动按“适合宽度”缩放，默认落在可读比例；Excel 375 下保留列标/行号与缩放控件，不出现页面级横向溢出。
   - 不支持：显示“该格式暂不支持在线预览”并给出下载引导；普通用户只显示提示，不显示下载按钮。
 - 下载：点击后请求 `download` 接口，浏览器保存原文件；失败时用统一错误提示，不把 JSON 错误当文件保存。
 - 375：预览弹窗全屏，表格横向滚动；操作按钮在表格行内换行或收进“更多”菜单，不出现横向溢出。
@@ -425,9 +432,12 @@
 
 #### R4.6 验收
 
-- PDF、Markdown、DOCX、XLSX、CSV、DOC 各 1 份，预览内容可读；PDF 使用浏览器原生预览。
+- PDF、Markdown、DOCX、XLSX、CSV、DOC 各 1 份，预览内容可读；PDF 使用浏览器原生预览；DOCX/DOC 按页渲染，标题、粗体、列表、表格、页边距与分页位置与原件大体一致；Excel/CSV 保留合并单元格、列宽、字体与底色，并显示列标和行号。
+- DOCX 预览工具栏显示“共 N 页”，缩放按钮可用；强制 `?html=1` 时能降级到语义 HTML，页面不白屏、不报错。
+- Excel 预览底部工作表标签可切换；列标 A/B/C 与行号 1/2/3 固定，横向滚动时仍可见。
+- 上传 8 种后缀（`.pdf/.docx/.md/.xlsx/.xlsm/.xls/.csv/.doc`）全部成功；启动时校验 `openpyxl`、`xlrd`、`python-docx`、`mammoth`，缺依赖时给出明确安装命令，不允许到上传阶段才报“缺少 openpyxl”。
 - 下载文件与上传文件字节一致，SHA-256 相同；中文文件名下载后名称正确。
-- `.xls` 预览显示工作表名、表头与前 100 行；超过 100 行有截断提示；CSV 单表预览正常。
+- `.xls` 预览显示工作表名、表头与前 100 行及基本样式；超过 100 行有截断提示；CSV 单表预览正常。
 - 管理员可预览、可下载；普通已登录用户可预览，但调用下载接口返回 `40303`。
 - 普通用户从问答来源卡片打开预览弹窗成功，页面不暴露知识库管理入口。
 - Markdown 中的 `<script>` 或 `javascript:` 链接不执行；预览不产生 XSS。
@@ -435,6 +445,82 @@
 - 文件被手动删除后，预览/下载返回 `40407`，文档列表仍可删除该记录。
 - 下载审计记录存在；预览不产生大量审计噪声。
 - 1440 与 375 截图通过；无横向溢出。
+
+#### R4.7 修复补丁：依赖自愈与格式保真（2026-11-20）
+
+**问题 1：上传 Excel 报“缺少 openpyxl 依赖”**
+
+- 根因：后端被 `C:\Python312\python.exe` 启动，绕过了项目 `.venv`，导致 `.venv` 中已安装的 `openpyxl`/`xlrd` 不可见。
+- 修复：
+  1. `backend/scripts/run_dev.py` 启动时检测当前解释器；若不是项目 `.venv`，自动用 `.venv\Scripts\python.exe` 重新执行入口。
+  2. 启动前检查 `openpyxl`、`xlrd`、`python-docx`、`mammoth`，缺失时打印 `pip install -r backend/requirements.txt` 并退出，避免运行到上传阶段才失败。
+  3. `backend/requirements.txt` 明确加入 `mammoth>=1.8`。
+- 验收：八种后缀逐一真实上传成功；启动日志显示使用 `.venv`。
+
+**问题 2：DOCX/DOC 预览是纯文本，Excel 丢失版式**
+
+- 根因：V5-2 首版预览只做“可读内容”，DOCX 走 `loader.extract_text` 返回纯文本，Excel 只把值塞进 `el-table`，样式与合并单元格全部丢失。
+- 修复：
+  1. 新增 `backend/services/preview_html.py`：DOCX 用 `mammoth` 转语义 HTML；`.doc` 先转 `.docx` 再转 HTML；Excel 生成带单元格样式、合并单元格、列宽与行高的 HTML 表格；`.xls` 用 xlrd 读取格式信息；CSV 生成基础表格。
+  2. 预览协议新增 `kind=html` 与 `sheets[].html/html_total_rows/html_truncated/col_widths`；旧 `headers/rows` 保留，兼容原有调用方。
+  3. 前端新增 `SafeHtml.vue`，统一用 `DOMPurify` 消毒；`DocPreviewDialog` 增加 DOCX/DOC HTML 分支与 Excel 样式表格分支。
+  4. 样式保留范围：标题层级、粗体/斜体、列表、表格、合并单元格、列宽、字体、字号、颜色、底色、边框、对齐和常见数字/日期格式。
+- 验收：DOCX 首页标题为 `<h1>`、加粗文本为 `<strong>`、表格带 `doc-table` 类；Excel HTML 含 `colspan`、字体加粗与底色；1440/375 弹窗无横向溢出。
+
+**仍有边界**
+
+- 以下边界为“语义 HTML 降级链路”的边界；默认 DOCX 按页渲染由 R4.8 提供，已覆盖页眉页脚、分页与 A4 纸张。
+- `.doc` 格式保真仍依赖 LibreOffice 或 Windows WPS/Office COM；缺失转换器时只能下载原件。
+- Excel 图表、条件格式、图片和透视表不进入预览；这些对象仍可通过下载原件查看。
+
+#### R4.8 原格式预览增强（2026-11-20）
+
+**目标**
+
+在不新增文档服务、不引入 LibreOffice/OnlyOffice/Collabora 的前提下，用纯前端只读组件把 DOCX/DOC 和 Excel/CSV 的预览体验拉到“接近 Office 原文件”。验收口径固定为：内容结构正确、样式大致保留、接近 Office 原文件，接受只读，不承诺可编辑和像素级一致。
+
+**方案**
+
+1. DOCX/DOC 改为“原字节 + 前端按页渲染”，不再默认走 mammoth 语义 HTML。
+   - 后端 `_docx_preview()`：`.docx` 直接读原文件；`.doc` 先用现有转换器转 `.docx`，复用同一份字节。
+   - 文件不超过 `PREVIEW_DOCX_MAX_BYTES = 6 MB` 时返回 `kind=docx`、`docx_base64`，并令 `content=""`、`truncated=false`。
+   - 超过上限时回退 `mammoth` 语义 HTML，避免把大文件塞进 JSON。
+   - `preview_html.py` 拆出 `_docx_stream_to_html()`、`docx_to_html()`、`docx_bytes_to_html()`、`doc_to_docx_bytes()`、`doc_to_html()`，`.doc` 只转换一次即可复用。
+   - `GET /api/docs/{doc_id}/preview?html=1` 提供显式降级；前端渲染异常时自动调用，不把技术错误直接抛给用户。
+2. 前端 `DocPreviewDialog.vue` 新增 `kind=docx` 分支。
+   - 动态 `import('docx-preview')`，`renderAsync()` 渲染到独立容器；`className='rag-docx'`、`inWrapper=true`、`breakPages=true`，渲染页眉页脚、脚注与分页，关闭批注、修订与 `altChunks`。
+   - 渲染后清理脚本、iframe、object、embed、`on*` 事件属性、危险链接和非 `data/blob` 图片，保持只读与 XSS 防护。
+   - 页面外层加纸张阴影、页间距、缩放与“适合宽度”；顶部显示“共 N 页”。
+3. Excel/CSV 增加 Office 式坐标轴。
+   - `_sheet_table_html()` 统一生成 `<colgroup>`、左上角 corner、列标 `A/B/C…` 与行号 `1/2/3…`。
+   - `_xlsx_sheet_html()` 每行生成 `sheet-rowhead`，表头生成 `sheet-colhead`，继续保留 openpyxl 的合并单元格、列宽、行高、字体、字号、颜色、底色、边框、对齐与数字格式。
+   - `_xls_sheet_html()` 使用 `xlrd.formula.colname` 生成列标；`csv_to_html()` 同样补列标/行号，表头作为第 1 行。
+   - 前端工作表标签移到底部，新增“表格”工具栏：缩小、放大、适合宽度；表头与行号 `sticky`，横向滚动时保持可见。
+4. 375 适配。
+   - DOCX 打开后自动按“适合宽度”缩放并计算比例，避免初始只看到纸张左上角。
+   - Excel 表格在弹窗内部滚动，页面级横向溢出必须为 0。
+5. 修复“DOCX 仍显示旧 HTML”的挂载时序问题。
+   - 根因：`load()` 先置 `loading=true`，写入 `preview` 后立刻 `nextTick` 调 `renderDocx()`；外层 `v-if="loading"` 尚未卸载，`docxBody` ref 为空，渲染函数直接走 HTML 降级。
+   - 修复：写入 `preview` 后先把 `loading=false`，再 `await nextTick()`，确保预览容器与 ref 已挂载后再渲染；其余分支同样调整，Excel 移动端自动适配也因此生效。
+
+**依赖与构建**
+
+- 前端新增 `docx-preview@^0.3.7`，动态 import 后单独 chunk；`package-lock.json` 同步更新。
+- 不新增后端进程、端口或文档服务；仍然只依赖现有 FastAPI + Vite。
+
+**安全与边界**
+
+- 预览接口仍要求登录；下载仍仅管理员。DOCX 原字节会以 base64 返回给已登录用户，属于“可预览但不可下载”的现有产品口径，本轮不改变权限模型。
+- `docx-preview` 产物统一走前端清洗；后端不使用浏览器执行任何文档脚本。
+- 只读预览，不支持编辑、批注、修订留痕、表单填写和宏。
+- 6 MB 以上 DOCX、复杂浮动文本框、艺术字、SmartArt、Excel 图表/条件格式/透视表仍可能降级或丢失；这些边界在验收报告中如实记录。
+
+**验收**
+
+- DOCX/DOC 打开后出现纸张页面、页边距、分页和“共 N 页”，不再直接显示语义 HTML；375 下自动适合宽度且无横向溢出。
+- Excel/XLS/XLSM/CSV 显示列标、行号和底部工作表标签；合并单元格、字体、底色、边框、对齐保持；缩放按钮生效；375 无页面级横向溢出。
+- `?html=1` 降级可用；前端渲染异常时自动降级。
+- 后端定向测试覆盖 `kind=docx`、base64 解码、`?html=1`、Excel 列标/行号；前端 `npm run build` 通过。
 
 ---
 
@@ -637,7 +723,7 @@
 2. 关键截图（1440 / 375）；
 3. 后端 `pytest`、前端 build、上一阶段接口回归；
 4. 数据清理记录与基线差集；
-5. 独立验收报告 MD，`present_files` 交付后再等确认。
+5. 独立验收报告 MD，命名统一为“V5-1 主题验收报告”“V5-2 主题验收报告”“V5-3 主题验收报告”；v6 版本依次使用 `V6-1`、`V6-2` 前缀，`present_files` 交付后再等确认。
 
 ---
 

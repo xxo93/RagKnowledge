@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import logging
@@ -16,11 +17,12 @@ from typing import Optional
 
 from ..config import ROOT_DIR, settings
 from ..errors import BizError, ERR_FILE_MISSING, ERR_FILE_TYPE, ERR_INGEST_FAILED
-from . import loader
+from . import loader, preview_html
 
 logger = logging.getLogger("rag.preview")
 
 PREVIEW_TEXT_LIMIT = 200_000
+PREVIEW_DOCX_MAX_BYTES = 6 * 1024 * 1024
 PREVIEW_MAX_ROWS = 100
 PREVIEW_MAX_SHEETS = 10
 PREVIEW_MAX_COLS = 80
@@ -97,9 +99,9 @@ def _meta_fields(meta: dict) -> dict:
     }
 
 
-def _read_text(path: Path, ext: str) -> tuple[str, bool]:
-    """文本类预览：Markdown 用原文，DOCX/DOC 复用 loader 抽取正文。"""
-    text = loader.extract_text(path) if ext in {".docx", ".doc"} else loader._extract_md(path)
+def _read_markdown(path: Path) -> tuple[str, bool]:
+    """Markdown 保留原文，由前端 marked + DOMPurify 还原标题/列表/代码块等格式。"""
+    text = loader._extract_md(path)
     truncated = len(text) > PREVIEW_TEXT_LIMIT
     return text[:PREVIEW_TEXT_LIMIT], truncated
 
@@ -186,12 +188,17 @@ def _xlsx_sheets(path: Path) -> tuple[list[dict], bool]:
             data_total = max(0, max_row - header_row)
             if data_total > PREVIEW_MAX_ROWS:
                 truncated = True
+            html_info = preview_html._xlsx_sheet_html(ws, formula_ws)
             sheets.append({
                 "name": ws.title,
                 "headers": headers,
                 "rows": rows,
                 "total_rows": data_total,
                 "truncated": data_total > PREVIEW_MAX_ROWS,
+                "html": html_info["html"],
+                "html_total_rows": html_info["html_total_rows"],
+                "html_truncated": html_info["html_truncated"],
+                "col_widths": html_info["col_widths"],
             })
     finally:
         wb.close()
@@ -203,7 +210,7 @@ def _xls_sheets(path: Path) -> tuple[list[dict], bool]:
     import xlrd
 
     try:
-        book = xlrd.open_workbook(str(path), on_demand=True)
+        book = xlrd.open_workbook(str(path), on_demand=True, formatting_info=True)
     except Exception as exc:
         logger.warning("预览 XLS 打开失败 %s：%s", path.name, exc)
         raise BizError(ERR_INGEST_FAILED, "原文件解析失败，请下载原件查看", http_status=500) from exc
@@ -244,12 +251,17 @@ def _xls_sheets(path: Path) -> tuple[list[dict], bool]:
             data_total = max(0, sheet.nrows - header_row - 1)
             sheet_truncated = data_total > PREVIEW_MAX_ROWS
             truncated = truncated or sheet_truncated
+            html_info = preview_html._xls_sheet_html(sheet, book)
             sheets.append({
                 "name": sheet.name,
                 "headers": headers,
                 "rows": rows,
                 "total_rows": data_total,
                 "truncated": sheet_truncated,
+                "html": html_info["html"],
+                "html_total_rows": html_info["html_total_rows"],
+                "html_truncated": html_info["html_truncated"],
+                "col_widths": html_info["col_widths"],
             })
         if book.nsheets > PREVIEW_MAX_SHEETS:
             truncated = True
@@ -294,19 +306,52 @@ def _csv_sheets(path: Path) -> tuple[list[dict], bool]:
         "rows": rows,
         "total_rows": total_rows,
         "truncated": truncated,
+        "html": preview_html.csv_to_html(rows, headers),
+        "html_total_rows": total_rows + 1,
+        "html_truncated": truncated,
+        "col_widths": [],
     }], truncated
 
 
-def build_preview(meta: dict) -> dict:
-    """构建非 PDF 的 JSON 预览结构；PDF 由路由直接 inline 返回。"""
+def _docx_preview(path: Path, ext: str) -> dict:
+    """DOCX/DOC 优先返回浏览器按页渲染所需字节；超过上限或前端回退时走语义 HTML。"""
+    data = path.read_bytes() if ext == ".docx" else preview_html.doc_to_docx_bytes(path)
+    if len(data) <= PREVIEW_DOCX_MAX_BYTES:
+        return {
+            "kind": "docx",
+            "content": "",
+            "docx_base64": base64.b64encode(data).decode("ascii"),
+            "truncated": False,
+        }
+    content, truncated = preview_html.docx_bytes_to_html(data)
+    return {"kind": "html", "content": content, "truncated": truncated}
+
+
+def build_preview(meta: dict, force_html: bool = False) -> dict:
+    """构建非 PDF 的 JSON 预览结构；PDF 由路由直接 inline 返回。
+
+    force_html=True 用于前端按页渲染失败后的降级：DOCX/DOC 只返回语义 HTML。
+    """
     path = resolve_original(meta)
     ext = Path(str(meta.get("doc_name") or "")).suffix.lower()
     base = _meta_fields(meta)
 
     if ext in TEXT_EXTS:
-        content, truncated = _read_text(path, ext)
-        kind = "markdown" if ext == ".md" else "text"
-        return {**base, "kind": kind, "content": content, "truncated": truncated, "sheets": []}
+        if ext == ".md":
+            content, truncated = _read_markdown(path)
+            kind = "markdown"
+            return {**base, "kind": kind, "content": content, "truncated": truncated, "sheets": []}
+
+        try:
+            if force_html:
+                content, truncated = (
+                    preview_html.docx_to_html(path) if ext == ".docx" else preview_html.doc_to_html(path)
+                )
+                return {**base, "kind": "html", "content": content, "truncated": truncated, "sheets": []}
+            return {**base, "sheets": [], **_docx_preview(path, ext)}
+        except RuntimeError as exc:
+            logger.warning("格式保真预览失败 %s：%s", path.name, exc)
+            raise BizError(ERR_INGEST_FAILED, str(exc), http_status=500) from exc
 
     if ext in SHEET_EXTS:
         if ext == ".csv":

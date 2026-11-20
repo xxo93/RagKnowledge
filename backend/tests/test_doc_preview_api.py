@@ -85,13 +85,19 @@ def test_preview_markdown_for_member(client: TestClient, monkeypatch, upload_fil
 
 
 def test_preview_xlsx_returns_sheets(client: TestClient, monkeypatch, upload_file):
-    """Excel 预览返回工作表名、表头、行和总行数。"""
+    """Excel 预览返回工作表名、表头、行和总行数，并返回带合并/样式的 HTML。"""
     openpyxl = pytest.importorskip("openpyxl")
+    from openpyxl.styles import Font, PatternFill
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "差旅报销"
     ws.append(["项目", "上限"])
     ws.append(["住宿", 500])
+    ws["A1"].font = Font(bold=True, color="FFFFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="FF1F4E79")
+    ws.merge_cells("A3:B3")
+    ws["A3"] = "合并标题"
+    ws.column_dimensions["A"].width = 18
     path = settings.upload_dir / f"_test_{uuid.uuid4().hex[:8]}.xlsx"
     wb.save(path)
     meta = {
@@ -112,8 +118,87 @@ def test_preview_xlsx_returns_sheets(client: TestClient, monkeypatch, upload_fil
         assert data["kind"] == "sheet"
         assert data["sheets"][0]["name"] == "差旅报销"
         assert data["sheets"][0]["headers"] == ["项目", "上限"]
-        assert data["sheets"][0]["rows"] == [["住宿", "500"]]
-        assert data["sheets"][0]["total_rows"] == 1
+        assert data["sheets"][0]["rows"][0] == ["住宿", "500"]
+        assert data["sheets"][0]["total_rows"] == 2
+        assert "colspan=\"2\"" in data["sheets"][0]["html"]
+        assert "font-weight:600" in data["sheets"][0]["html"]
+        assert "background:#1F4E79" in data["sheets"][0]["html"]
+        assert '<th class="sheet-colhead">A</th>' in data["sheets"][0]["html"]
+        assert '<th class="sheet-rowhead">1</th>' in data["sheets"][0]["html"]
+        assert '<th class="sheet-corner"></th>' in data["sheets"][0]["html"]
+        assert data["sheets"][0]["html_total_rows"] == 3
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _write_sample_docx(path: Path) -> None:
+    """生成同时含标题、加粗与表格的 DOCX，供按页预览与 HTML 降级测试复用。"""
+    docx = pytest.importorskip("docx")
+    doc = docx.Document()
+    doc.add_heading("差旅制度", level=1)
+    p = doc.add_paragraph("住宿上限 ")
+    p.add_run("500 元").bold = True
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "项目"
+    table.cell(0, 1).text = "金额"
+    table.cell(1, 0).text = "住宿"
+    table.cell(1, 1).text = "500"
+    doc.save(path)
+
+
+def _docx_meta(path: Path) -> dict:
+    return {
+        "doc_id": 99, "doc_name": "差旅制度.docx",
+        "file_path": path.relative_to(ROOT_DIR).as_posix(),
+        "file_size": path.stat().st_size, "status": 1, "chunk_count": 1,
+        "summary": "", "create_time": None,
+    }
+
+
+def test_preview_docx_returns_page_payload(client: TestClient, monkeypatch):
+    """DOCX 默认返回按页渲染所需字节，前端用 docx-preview 还原分页、页边距与表格。"""
+    import base64
+
+    path = settings.upload_dir / f"_test_{uuid.uuid4().hex[:8]}.docx"
+    _write_sample_docx(path)
+    meta = _docx_meta(path)
+    try:
+        _login_as(monkeypatch)
+        async def fake_meta(doc_id):
+            return meta
+        monkeypatch.setattr(vs, "get_document_meta", fake_meta)
+        client.cookies.set("rag_session", "test-token")
+        resp = client.get("/api/docs/99/preview")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["kind"] == "docx"
+        assert data["docx_base64"]
+        assert base64.b64decode(data["docx_base64"]).startswith(b"PK")
+        assert data["content"] == ""
+        assert data["truncated"] is False
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_preview_docx_html_fallback(client: TestClient, monkeypatch):
+    """`?html=1` 返回语义 HTML，供前端按页渲染失败时降级。"""
+    pytest.importorskip("mammoth")
+    path = settings.upload_dir / f"_test_{uuid.uuid4().hex[:8]}.docx"
+    _write_sample_docx(path)
+    meta = _docx_meta(path)
+    try:
+        _login_as(monkeypatch)
+        async def fake_meta(doc_id):
+            return meta
+        monkeypatch.setattr(vs, "get_document_meta", fake_meta)
+        client.cookies.set("rag_session", "test-token")
+        resp = client.get("/api/docs/99/preview?html=1")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["kind"] == "html"
+        assert "<h1>差旅制度</h1>" in data["content"]
+        assert "<strong>500 元</strong>" in data["content"]
+        assert "doc-table" in data["content"]
     finally:
         path.unlink(missing_ok=True)
 

@@ -27,6 +27,7 @@ langgraph>=0.2.0
 # ---- 文档解析（PDF / DOCX / Markdown / Excel / CSV / DOC）----
 PyPDF2>=3.0
 python-docx>=1.1
+mammoth>=1.8               # DOCX -> 语义 HTML（格式保真预览）
 openpyxl>=3.1              # xlsx / xlsm
 xlrd>=2,<3                 # 旧版 xls
 pywin32>=306; sys_platform == "win32"  # .doc 通过 Word COM 转 docx（非 Windows 可用 LibreOffice）
