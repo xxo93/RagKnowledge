@@ -2,6 +2,7 @@
 // 引用来源容器：区头统计、全部展开/收起，以及多条来源的折叠管理。
 import { computed, nextTick, ref } from 'vue'
 import SourceCard from './SourceCard.vue'
+import DocPreviewDialog from './DocPreviewDialog.vue'
 
 const props = defineProps({
   sources: { type: Array, default: () => [] },
@@ -10,6 +11,8 @@ const props = defineProps({
 
 const expandedIds = ref(new Set())
 const rootRef = ref(null)
+const previewVisible = ref(false)
+const previewDoc = ref(null)
 
 const sourceKey = (source, index) => source.chunk_id ?? `${source.doc_id ?? source.doc_name}-${source.chunk_index}-${index}`
 
@@ -38,6 +41,12 @@ function toggleSource(entry) {
   if (next.has(key)) next.delete(key)
   else next.add(key)
   expandedIds.value = next
+}
+
+function openPreview(source) {
+  if (!source?.doc_id) return
+  previewDoc.value = { doc_id: source.doc_id, doc_name: source.doc_name }
+  previewVisible.value = true
 }
 
 function toggleAll() {
@@ -83,8 +92,11 @@ defineExpose({ focusSource })
         :data-original-index="entry.index"
         :expanded="expandedIds.has(sourceKey(entry.source, entry.index))"
         @toggle="toggleSource(entry)"
+        @preview="openPreview"
       />
     </div>
+
+    <DocPreviewDialog v-model="previewVisible" :doc="previewDoc || {}" />
   </div>
 </template>
 

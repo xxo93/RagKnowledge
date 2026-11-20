@@ -1,15 +1,18 @@
 <script setup>
-// 知识库管理页：批量上传（大文件自动分块）、文档列表、删除、重解析与索引重建
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+// 知识库管理页：多格式上传队列、分块上传、时间/关键字筛选、文档列表、删除与重解析
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FileUploader from '../components/FileUploader.vue'
+import UploadQueue from '../components/UploadQueue.vue'
 import DocTable from '../components/DocTable.vue'
+import DocPreviewDialog from '../components/DocPreviewDialog.vue'
 import {
   fetchSystemInfo,
   uploadDoc,
   uploadDocChunked,
   listDocs,
   deleteDoc,
+  downloadDocFile,
   reparseDoc,
   rebuildIndex
 } from '../api/docs'
@@ -49,14 +52,23 @@ const total = ref(0)
 const page = ref(1)
 const size = 10
 const tableLoading = ref(false)
-const uploading = ref(false)
 const indexBusy = ref(false)
 const processingIds = ref([])
 const keyword = ref('')
 const statusFilter = ref('all')
+const dateRange = ref(null)
+const appliedStatus = ref('all')
+const appliedDateRange = ref(null)
 const loadError = ref(false)
-const uploadReport = ref(null)
-const uploadProgress = ref('')
+const settingsOpen = ref([])
+const queue = ref([])
+const queueRunning = ref(false)
+const previewVisible = ref(false)
+const previewDoc = ref(null)
+let queueSeq = 0
+let keywordTimer = null
+let skipKeywordWatch = false
+let requestSeq = 0
 
 // 分块大小（MB）与并发数：优先用用户上次的选择（localStorage），
 // 没有选择过则采用配置中心下发的默认值（UPLOAD_DEFAULT_CHUNK_MB / UPLOAD_DEFAULT_CONCURRENCY）。
@@ -78,6 +90,58 @@ const chunkOptions = computed(() => {
   const current = chunkMb.value
   return base.includes(current) ? base : [...base, current].sort((a, b) => a - b)
 })
+
+const uploading = computed(() =>
+  queue.value.some((item) => item.status === 'uploading' || item.status === 'processing')
+)
+
+const hasFilters = computed(
+  () =>
+    Boolean(keyword.value.trim()) ||
+    Boolean(appliedDateRange.value?.length) ||
+    appliedStatus.value !== 'all'
+)
+
+const emptyText = computed(() =>
+  hasFilters.value ? '没有匹配的文档，试试清空筛选' : '暂无文档，上传后在此展示'
+)
+
+function dateKey(range) {
+  return range && range[0] && range[1] ? `${range[0]}~${range[1]}` : ''
+}
+
+// 日期/状态改了但还没点【查询】：按钮旁给出“待查询”，避免误以为已生效
+const pendingFilter = computed(
+  () => dateKey(dateRange.value) !== dateKey(appliedDateRange.value) || statusFilter.value !== appliedStatus.value
+)
+
+const dateShortcuts = [
+  {
+    text: '今天',
+    value: () => {
+      const today = new Date()
+      return [today, today]
+    }
+  },
+  {
+    text: '近 7 天',
+    value: () => {
+      const end = new Date()
+      const start = new Date()
+      start.setDate(start.getDate() - 6)
+      return [start, end]
+    }
+  },
+  {
+    text: '近 30 天',
+    value: () => {
+      const end = new Date()
+      const start = new Date()
+      start.setDate(start.getDate() - 29)
+      return [start, end]
+    }
+  }
+]
 
 watch(chunkMb, (v) => {
   if (!applyingDefaults.value) writeStored(STORAGE_CHUNK_MB, v)
@@ -113,89 +177,215 @@ watch(uploadLimits, (limits) => {
 function currentFilters() {
   return {
     keyword: keyword.value.trim(),
-    status: statusFilter.value
+    status: appliedStatus.value,
+    start_date: appliedDateRange.value?.[0] || '',
+    end_date: appliedDateRange.value?.[1] || ''
   }
 }
 
 async function refresh(p = page.value) {
+  const seq = ++requestSeq
   tableLoading.value = true
   try {
     const data = await listDocs(p, size, currentFilters())
+    if (seq !== requestSeq) return // 旧请求晚到，丢弃
     rows.value = data?.list || []
     total.value = data?.total || 0
     page.value = p
     loadError.value = false
   } catch (e) {
+    if (seq !== requestSeq) return
     loadError.value = true
     ElMessage.error(e.message || '文档列表加载失败')
   } finally {
-    tableLoading.value = false
+    if (seq === requestSeq) tableLoading.value = false
   }
 }
 
-watch([keyword, statusFilter], () => refresh(1))
+// 关键字自动筛选：停止输入 300ms 再请求，避免每敲一个字打一次后端
+watch(keyword, () => {
+  if (skipKeywordWatch) {
+    skipKeywordWatch = false
+    return
+  }
+  clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => refresh(1), 300)
+})
+
+function onQuery() {
+  clearTimeout(keywordTimer)
+  appliedStatus.value = statusFilter.value
+  appliedDateRange.value = dateRange.value ? [...dateRange.value] : null
+  refresh(1)
+}
+
+function onReset() {
+  clearTimeout(keywordTimer)
+  // 只有关键字原本非空时 watch 才会触发；避免空关键字重置后把下一次输入误吞掉
+  skipKeywordWatch = Boolean(keyword.value)
+  keyword.value = ''
+  dateRange.value = null
+  statusFilter.value = 'all'
+  appliedStatus.value = 'all'
+  appliedDateRange.value = null
+  refresh(1)
+}
+
+function addQueueItem(file, extra = {}) {
+  queue.value.push({
+    id: ++queueSeq,
+    file,
+    name: file?.name || extra.name || '未命名文件',
+    size: Number(file?.size || extra.size || 0),
+    status: 'queued',
+    percent: 0,
+    loaded: 0,
+    total: Number(file?.size || extra.size || 0),
+    chunkCount: 0,
+    chunkCountResult: 0,
+    error: '',
+    ...extra
+  })
+}
+
+function onFiles(files) {
+  if (!files?.length) return
+  for (const file of files) addQueueItem(file)
+  processQueue()
+}
 
 function onInvalidFiles(skipped) {
-  uploadReport.value = { success: [], failed: [], skipped: skipped || [], totalChunks: 0 }
+  for (const item of skipped || []) {
+    addQueueItem(null, {
+      name: item.name,
+      size: item.size,
+      status: 'skipped',
+      percent: 100,
+      error: item.reason || '已跳过'
+    })
+  }
 }
 
-function formatMb(bytes) {
-  return `${(Number(bytes || 0) / (1024 * 1024)).toFixed(1)}MB`
-}
-
-async function onUpload(payload) {
-  const files = (Array.isArray(payload) ? payload : [payload]).filter(Boolean)
-  if (!files.length) return
-  uploading.value = true
-  const success = []
-  const failed = []
+async function uploadItem(item) {
+  item.status = 'uploading'
+  item.error = ''
+  item.percent = 0
+  item.loaded = 0
+  item.total = item.size
   const chunkBytes = chunkMb.value * 1024 * 1024
-  let totalChunks = 0
+
   try {
-    // 逐文件串行：避免多个文件的解析/向量化同时抢占 CPU 与 Embedding 配额；
-    // 单个文件内部按「分块大小 + 并发数」并行上传分片
-    for (const file of files) {
-      try {
-        let result
-        if (file.size > chunkBytes) {
-          uploadProgress.value = `${file.name}：准备分块上传…`
-          result = await uploadDocChunked(file, {
-            chunkSize: chunkBytes,
-            concurrency: concurrency.value,
-            onProgress: (p) => {
-              uploadProgress.value = `${file.name}：分块上传 ${p.percent}%（${p.chunkCount} 片，${formatMb(p.loaded)}/${formatMb(p.total)}）`
-            }
-          })
-        } else {
-          uploadProgress.value = `${file.name}：上传中…`
-          result = await uploadDoc(file)
+    let result
+    if (item.size > chunkBytes) {
+      result = await uploadDocChunked(item.file, {
+        chunkSize: chunkBytes,
+        concurrency: concurrency.value,
+        onProgress: (p) => {
+          item.percent = Math.max(0, Math.min(100, Number(p.percent || 0)))
+          item.loaded = p.loaded
+          item.total = p.total
+          item.chunkCount = p.chunkCount
+          if (item.percent >= 100 && item.status === 'uploading') item.status = 'processing'
         }
-        success.push({
-          file_name: file.name,
-          doc_id: result?.doc_id,
-          chunk_count: result?.chunk_count,
-          status: result?.status,
-          mode: file.size > chunkBytes ? 'chunked' : 'single'
-        })
-        totalChunks += Number(result?.chunk_count || 0)
-      } catch (e) {
-        failed.push({ file_name: file.name, error: e.message || '上传失败，请查看后端日志' })
-      } finally {
-        uploadProgress.value = ''
+      })
+    } else {
+      result = await uploadDoc(item.file, (evt) => {
+        const totalBytes = evt.total || item.size
+        item.percent = totalBytes ? Math.round((evt.loaded / totalBytes) * 100) : 0
+        if (item.percent >= 100 && item.status === 'uploading') item.status = 'processing'
+      })
+    }
+    item.status = 'success'
+    item.percent = 100
+    item.docId = result?.doc_id
+    item.chunkCountResult = Number(result?.chunk_count || 0)
+    return { ok: true, chunks: item.chunkCountResult }
+  } catch (e) {
+    item.status = 'failed'
+    item.error = e.message || '上传失败，请查看后端日志'
+    return { ok: false, chunks: 0 }
+  }
+}
+
+async function processQueue() {
+  if (queueRunning.value) return
+  queueRunning.value = true
+  let success = 0
+  let failed = 0
+  let chunks = 0
+  try {
+    // 逐文件串行：避免多个文件同时解析/向量化抢 CPU 与 Embedding 配额
+    while (true) {
+      const item = queue.value.find((entry) => entry.status === 'queued')
+      if (!item) break
+      const result = await uploadItem(item)
+      if (result.ok) {
+        success += 1
+        chunks += result.chunks
+      } else {
+        failed += 1
       }
     }
-    uploadReport.value = { success, failed, skipped: [], totalChunks }
-    if (!failed.length) {
-      ElMessage.success(`上传完成：${success.length} 个文件，共 ${totalChunks} 个切片`)
-    } else if (success.length > 0) {
-      ElMessage.warning(`部分成功：成功 ${success.length} 个、失败 ${failed.length} 个`)
-    } else {
-      ElMessage.error('上传失败，请查看下方失败原因')
-    }
-    await refresh(1)
   } finally {
-    uploading.value = false
-    uploadProgress.value = ''
+    queueRunning.value = false
+  }
+  if (success) ElMessage.success(`上传完成：${success} 个文件，共 ${chunks} 个切片`)
+  if (failed) ElMessage.warning(`有 ${failed} 个文件上传失败，可在队列中重试`)
+  if (success) await refresh(1)
+}
+
+function retryItem(id) {
+  const item = queue.value.find((entry) => entry.id === id)
+  if (!item || item.status !== 'failed') return
+  item.status = 'queued'
+  item.error = ''
+  item.percent = 0
+  processQueue()
+}
+
+function retryAllFailed() {
+  for (const item of queue.value) {
+    if (item.status === 'failed') {
+      item.status = 'queued'
+      item.error = ''
+      item.percent = 0
+    }
+  }
+  processQueue()
+}
+
+function removeItem(id) {
+  const item = queue.value.find((entry) => entry.id === id)
+  if (!item || item.status === 'uploading' || item.status === 'processing') return
+  queue.value = queue.value.filter((entry) => entry.id !== id)
+}
+
+function clearCompleted() {
+  queue.value = queue.value.filter((entry) => entry.status !== 'success' && entry.status !== 'skipped')
+}
+
+function onPreview(row) {
+  if (row.status === 0) {
+    ElMessage.warning('文档处理中，暂不可预览')
+    return
+  }
+  previewDoc.value = row
+  previewVisible.value = true
+}
+
+async function onDownload(row) {
+  try {
+    const blob = await downloadDocFile(row.doc_id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = row.doc_name || 'document'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(e.message || '下载失败，请稍后重试')
   }
 }
 
@@ -272,6 +462,10 @@ onMounted(async () => {
   }
   await refresh(1)
 })
+
+onBeforeUnmount(() => {
+  clearTimeout(keywordTimer)
+})
 </script>
 
 <template>
@@ -285,54 +479,45 @@ onMounted(async () => {
       </div>
     </template>
 
-    <!-- 上传区：前端先做后缀与大小校验；超过分块阈值的文件自动分块并发上传 -->
+    <!-- 上传区：前端先做后缀与大小校验；合法文件进入队列，逐文件串行处理 -->
     <FileUploader
       :uploading="uploading"
       :max-mb="uploadLimits.totalMb"
-      :progress-text="uploadProgress"
-      @upload="onUpload"
+      @files="onFiles"
       @invalid="onInvalidFiles"
     />
 
-    <!-- 分块策略：分块大小与并发数可自选，选择记在 localStorage，范围受服务端上限约束 -->
-    <div class="upload-options">
-      <span class="opt-label">分块大小</span>
-      <el-select v-model="chunkMb" size="small" aria-label="分块大小" class="opt-select">
-        <el-option v-for="mb in chunkOptions" :key="mb" :label="`${mb} MB`" :value="mb" />
-      </el-select>
-      <span class="opt-label">并发数</span>
-      <el-select v-model="concurrency" size="small" aria-label="分块并发数" class="opt-select">
-        <el-option v-for="n in [1, 2, 3, 4, 5, 6]" :key="n" :label="`${n}`" :value="n" />
-      </el-select>
-      <span class="opt-tip">
-        ≤ {{ chunkMb }}MB 走单次请求；更大的文件按 {{ chunkMb }}MB/片、{{ concurrency }} 片并发上传，
-        单文件上限 {{ uploadLimits.totalMb }}MB，单片上限 {{ uploadLimits.chunkMaxMb }}MB
-      </span>
-    </div>
+    <UploadQueue
+      :items="queue"
+      @retry="retryItem"
+      @retry-all="retryAllFailed"
+      @remove="removeItem"
+      @clear="clearCompleted"
+    />
 
-    <el-alert
-      v-if="uploadReport"
-      :type="(uploadReport.failed.length || uploadReport.skipped?.length) ? 'warning' : 'success'"
-      :closable="false"
-      show-icon
-      class="upload-report"
-    >
-      <template #title>
-        本轮上传：成功 {{ uploadReport.success.length }} 个、失败 {{ uploadReport.failed.length }} 个
-        <span v-if="uploadReport.skipped?.length">、跳过 {{ uploadReport.skipped.length }} 个</span>
-        <span v-if="uploadReport.totalChunks">，共 {{ uploadReport.totalChunks }} 个切片</span>
-      </template>
-      <div v-if="uploadReport.failed.length" class="report-failed">
-        <div v-for="(item, idx) in uploadReport.failed" :key="`fail-${idx}`">
-          · {{ item.file_name }}：{{ item.error || item.error_msg || '解析或向量化失败' }}
+    <!-- 分块策略：默认收起；分块大小与并发数可自选，选择记在 localStorage -->
+    <el-collapse v-model="settingsOpen" class="upload-settings">
+      <el-collapse-item name="settings">
+        <template #title>
+          <span class="settings-title">上传设置</span>
+          <span class="settings-summary">{{ chunkMb }}MB / 片 · {{ concurrency }} 片并发</span>
+        </template>
+        <div class="upload-options">
+          <span class="opt-label">分块大小</span>
+          <el-select v-model="chunkMb" size="small" aria-label="分块大小" class="opt-select">
+            <el-option v-for="mb in chunkOptions" :key="mb" :label="`${mb} MB`" :value="mb" />
+          </el-select>
+          <span class="opt-label">并发数</span>
+          <el-select v-model="concurrency" size="small" aria-label="分块并发数" class="opt-select">
+            <el-option v-for="n in [1, 2, 3, 4, 5, 6]" :key="n" :label="`${n}`" :value="n" />
+          </el-select>
+          <span class="opt-tip">
+            ≤ {{ chunkMb }}MB 走单次请求；更大的文件按 {{ chunkMb }}MB/片、{{ concurrency }} 片并发上传，
+            单文件上限 {{ uploadLimits.totalMb }}MB，单片上限 {{ uploadLimits.chunkMaxMb }}MB
+          </span>
         </div>
-      </div>
-      <div v-if="uploadReport.skipped?.length" class="report-failed">
-        <div v-for="(item, idx) in uploadReport.skipped" :key="`skip-${idx}`">
-          · {{ item }}
-        </div>
-      </div>
-    </el-alert>
+      </el-collapse-item>
+    </el-collapse>
 
     <el-divider />
 
@@ -341,9 +526,23 @@ onMounted(async () => {
         v-model="keyword"
         size="small"
         clearable
-        placeholder="按文档名筛选"
+        placeholder="输入文档名称关键字，自动筛选"
         aria-label="按文档名筛选"
         class="filter-input"
+        @keyup.enter="onQuery"
+      />
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        size="small"
+        unlink-panels
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD"
+        :shortcuts="dateShortcuts"
+        class="filter-date"
+        aria-label="按上传时间范围筛选"
       />
       <el-select v-model="statusFilter" size="small" aria-label="按状态筛选" class="filter-select">
         <el-option label="全部状态" value="all" />
@@ -351,9 +550,18 @@ onMounted(async () => {
         <el-option label="成功" value="1" />
         <el-option label="失败" value="2" />
       </el-select>
-      <el-button type="primary" plain size="small" :loading="indexBusy" @click="onRebuildIndex">
+      <el-button type="primary" size="small" @click="onQuery">查询</el-button>
+      <el-button size="small" @click="onReset">重置</el-button>
+      <span v-if="pendingFilter" class="pending-tip">筛选已修改，点击查询生效</span>
+      <span class="toolbar-spacer" />
+      <el-button type="primary" plain size="small" :loading="indexBusy" :disabled="uploading" @click="onRebuildIndex">
         重建 HNSW 索引
       </el-button>
+    </div>
+
+    <div class="result-summary">
+      <span>共 {{ total }} 篇</span>
+      <button v-if="hasFilters" type="button" class="clear-filter" @click="onReset">清空筛选</button>
     </div>
 
     <el-alert
@@ -371,9 +579,18 @@ onMounted(async () => {
     <DocTable
       :rows="rows"
       :loading="tableLoading"
+      :empty-text="emptyText"
       :processing-ids="processingIds"
       @remove="onRemove"
       @reparse="onReparse"
+      @preview="onPreview"
+      @download="onDownload"
+    />
+
+    <DocPreviewDialog
+      v-model="previewVisible"
+      :doc="previewDoc || {}"
+      allow-download
     />
 
     <div class="pager" v-if="total > 0">
@@ -391,15 +608,36 @@ onMounted(async () => {
 
 <style scoped>
 .page-head { display: flex; justify-content: space-between; align-items: center; }
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-.filter-input { width: 220px; }
-.filter-select { width: 130px; }
-.upload-report { margin: 12px 0 0; }
-.upload-options { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.filter-input { width: 240px; }
+.filter-date { width: 250px; }
+.filter-select { width: 120px; }
+.toolbar-spacer { flex: 1; min-width: 8px; }
+.pending-tip { font-size: 12px; color: var(--warning, #e6a23c); }
+.result-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.clear-filter { border: none; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; padding: 0; }
+.clear-filter:hover { text-decoration: underline; }
+.upload-settings { margin-top: 10px; }
+.settings-title { font-size: 13px; color: var(--text-secondary); }
+.settings-summary { margin-left: 10px; font-size: 12px; color: var(--text-muted); }
+.upload-options { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .opt-label { font-size: 12px; color: var(--text-secondary); }
 .opt-select { width: 96px; }
 .opt-tip { font-size: 12px; color: var(--text-muted); }
-.report-failed { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
 .load-error { margin-bottom: 12px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 12px; }
+@media (max-width: 640px) {
+  .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .toolbar { align-items: stretch; }
+  .filter-input, .filter-date, .filter-select { width: 100%; }
+  .toolbar-spacer { display: none; }
+  .pager { justify-content: center; }
+}
 </style>

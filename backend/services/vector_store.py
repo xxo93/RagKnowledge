@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Optional
 
 from ..db import get_pool, to_vector
@@ -136,7 +137,8 @@ async def get_document_meta(doc_id: int) -> Optional[dict]:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT doc_id, doc_name, file_path, status, chunk_count, summary
+                SELECT doc_id, doc_name, file_path, file_size, status,
+                       chunk_count, summary, create_time
                 FROM document WHERE doc_id = %(id)s
                 """,
                 {"id": doc_id},
@@ -145,7 +147,11 @@ async def get_document_meta(doc_id: int) -> Optional[dict]:
             if row is None:
                 return None
             return dict(zip(
-                ["doc_id", "doc_name", "file_path", "status", "chunk_count", "summary"], row
+                [
+                    "doc_id", "doc_name", "file_path", "file_size", "status",
+                    "chunk_count", "summary", "create_time",
+                ],
+                row,
             ))
 
 
@@ -204,6 +210,8 @@ async def list_documents(
     size: int,
     keyword: Optional[str] = None,
     status: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
 ) -> tuple[int, list[dict]]:
     pool = get_pool()
     offset = (page - 1) * size
@@ -216,6 +224,13 @@ async def list_documents(
     if status is not None:
         where.append("status = %(status)s")
         params["status"] = int(status)
+    if start_date is not None:
+        where.append("create_time >= %(start_date)s::date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        # 结束日包含全天：< 结束日 + 1 天，避免 23:59:59 的文档被漏掉
+        where.append("create_time < (%(end_date)s::date + interval '1 day')")
+        params["end_date"] = end_date
 
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     async with pool.connection() as conn:

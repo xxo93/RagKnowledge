@@ -18,22 +18,25 @@ import logging
 import re
 import shutil
 import time
+from datetime import date
 from typing import Optional
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ..errors import BizError, ok, ERR_INGEST_FAILED
+from ..errors import BizError, ok, ERR_INGEST_FAILED, ERR_DOC_NOT_FOUND
 from ..config import settings
-from ..services import app_config, audit, ingest, vector_store as vs, maintenance
-from ..services.auth_deps import require_admin
+from ..services import app_config, audit, ingest, preview as preview_service, vector_store as vs, maintenance
+from ..services.auth_deps import get_current_user, require_admin
 
 logger = logging.getLogger("rag.docs")
 
 router = APIRouter(prefix="/api/docs", tags=["docs"])
 
-ALLOWED_EXTS = {".pdf", ".docx", ".md"}
+ALLOWED_EXTS = {".pdf", ".docx", ".md", ".xlsx", ".xlsm", ".xls", ".csv", ".doc"}
 
 # 上传流读取块大小：分块读取即可边读边判超限，避免“先读进内存再校验”
 READ_BLOCK_BYTES = 64 * 1024
@@ -300,11 +303,82 @@ async def list_docs(
     size: int = Query(10, ge=1, le=100),
     keyword: str = Query("", description="按文档名模糊筛选"),
     status: Optional[int] = Query(None, ge=0, le=2, description="0 处理中 / 1 成功 / 2 失败"),
+    start_date: str = Query("", description="上传时间下界 YYYY-MM-DD，包含当天"),
+    end_date: str = Query("", description="上传时间上界 YYYY-MM-DD，包含当天"),
     _: dict = Depends(require_admin),
 ):
-    """GET /api/docs/list?page=&size=&keyword=&status= —— 管理员分页读取文档列表。"""
-    total, items = await vs.list_documents(page, size, keyword=keyword or None, status=status)
+    """GET /api/docs/list?page=&size=&keyword=&status=&start_date=&end_date= —— 管理员分页读取文档列表。"""
+    start = _parse_date(start_date, "start_date")
+    end = _parse_date(end_date, "end_date")
+    if start and end and start > end:
+        raise BizError(40001, "开始日期不能晚于结束日期", http_status=400)
+    total, items = await vs.list_documents(
+        page,
+        size,
+        keyword=keyword or None,
+        status=status,
+        start_date=start,
+        end_date=end,
+    )
     return ok({"total": total, "list": items})
+
+
+def _parse_date(value: str, field: str) -> Optional[date]:
+    """把 YYYY-MM-DD 解析为 date；空串返回 None，非法格式返回 40001。"""
+    if not value or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise BizError(40001, f"{field} 必须是 YYYY-MM-DD 格式", http_status=400) from exc
+
+
+@router.get("/{doc_id}/preview")
+async def preview_doc(doc_id: int, user: dict = Depends(get_current_user)):
+    """GET /api/docs/{doc_id}/preview —— 已登录用户读取原件预览。
+
+    PDF 直接 inline 返回原文件；其他格式返回 JSON 可读内容（Markdown/文本/表格）。
+    预览只读，不触发重解析、切片或向量化。
+    """
+    meta = await vs.get_document_meta(doc_id)
+    if meta is None:
+        raise BizError(ERR_DOC_NOT_FOUND, "文档不存在", http_status=404)
+    if meta.get("status") == 0:
+        raise BizError(40001, "文档处理中，暂不可预览", http_status=400)
+
+    path = preview_service.resolve_original(meta)
+    ext = Path(str(meta.get("doc_name") or "")).suffix.lower()
+    if ext == ".pdf":
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=preview_service.safe_download_name(meta.get("doc_name"), ext),
+            content_disposition_type="inline",
+        )
+
+    data = await run_in_threadpool(preview_service.build_preview, meta)
+    return ok(data)
+
+
+@router.get("/{doc_id}/download")
+async def download_doc(doc_id: int, user: dict = Depends(require_admin)):
+    """GET /api/docs/{doc_id}/download —— 仅管理员下载原件，写下载审计。"""
+    meta = await vs.get_document_meta(doc_id)
+    if meta is None:
+        raise BizError(ERR_DOC_NOT_FOUND, "文档不存在", http_status=404)
+    path = preview_service.resolve_original(meta)
+    ext = Path(str(meta.get("doc_name") or "")).suffix.lower()
+    size = path.stat().st_size
+    await audit.log_operation(
+        user["user_id"], audit.DOC_DOWNLOAD, "document", doc_id, 1,
+        {"file_name": meta.get("doc_name"), "bytes": size},
+    )
+    return FileResponse(
+        path,
+        media_type=preview_service.guess_media_type(ext),
+        filename=preview_service.safe_download_name(meta.get("doc_name"), ext),
+        content_disposition_type="attachment",
+    )
 
 
 @router.delete("/{doc_id}")

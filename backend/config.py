@@ -245,6 +245,15 @@ class Settings(BaseSettings):
     UPLOAD_DEFAULT_CHUNK_MB: int = 4
     UPLOAD_DEFAULT_CONCURRENCY: int = 3
 
+    # ---------- 多格式解析（v5 / R1）----------
+    # Excel/CSV 解析上限：防止异常宽表/超长表把内存和切片数拖垮；超限截断并写入标记
+    EXCEL_MAX_SHEETS: int = 20
+    EXCEL_MAX_ROWS_PER_SHEET: int = 5000
+    EXCEL_MAX_COLS: int = 200
+    EXCEL_MAX_CELL_CHARS: int = 200
+    # .doc 转 .docx 的超时（秒）；支持 LibreOffice 或 Windows Word COM，二者都不可用时明确报错
+    DOC_CONVERT_TIMEOUT: int = 60
+
     # ---------- 默认管理员（演示环境开箱即用）----------
     # 由 scripts/migrate_auth_multitenant.py 首次建库与 scripts/ensure_admin.py 使用；
     # 生产部署请用环境变量覆盖，并登录后立即改密（或把 DEFAULT_ADMIN_PASSWORD 置空改为随机生成）。

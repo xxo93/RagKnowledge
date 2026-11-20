@@ -1,5 +1,5 @@
 // 知识库管理接口；仅管理员可调用，后端会强制校验权限
-import http from './http'
+import http, { notifyError } from './http'
 
 // POST /api/docs/upload —— multipart 单文件上传，同步处理后返回 {doc_id, chunk_count, status}
 export function uploadDoc(file, onUploadProgress) {
@@ -105,17 +105,59 @@ export function rebuildIndex() {
   return http.post('/docs/reindex')
 }
 
-// GET /api/docs/list?page=&size=&keyword=&status=
+// GET /api/docs/list?page=&size=&keyword=&status=&start_date=&end_date=
 export function listDocs(page = 1, size = 10, filters = {}) {
   const params = { page, size }
   if (filters.keyword) params.keyword = filters.keyword
   if (filters.status && filters.status !== 'all') params.status = filters.status
+  if (filters.start_date) params.start_date = filters.start_date
+  if (filters.end_date) params.end_date = filters.end_date
   return http.get('/docs/list', { params })
 }
 
 // DELETE /api/docs/{doc_id}
 export function deleteDoc(docId) {
   return http.delete(`/docs/${docId}`)
+}
+
+/** 读取错误响应：下载/预览用原生 fetch，错误可能是 JSON，也可能是 Blob。 */
+async function readDocError(res) {
+  let body = {}
+  try {
+    const type = res.headers.get('content-type') || ''
+    body = type.includes('application/json') ? await res.json() : {}
+  } catch (_) {
+    body = {}
+  }
+  const err = new Error(body.msg || `请求失败（HTTP ${res.status}）`)
+  err.bizCode = body.code
+  err.httpStatus = res.status
+  if (res.status === 401) notifyError(err)
+  return err
+}
+
+// GET /api/docs/{doc_id}/preview —— 已登录即可；PDF 返回 Blob，其他返回 JSON 可读内容
+export async function fetchDocPreview(docId) {
+  const res = await fetch(`/api/docs/${docId}/preview`, { credentials: 'include' })
+  if (!res.ok) throw await readDocError(res)
+  const type = res.headers.get('content-type') || ''
+  if (type.includes('application/pdf')) {
+    return { kind: 'pdf', blob: await res.blob() }
+  }
+  const body = await res.json()
+  if (body?.code !== 0) {
+    const err = new Error(body?.msg || '预览失败')
+    err.bizCode = body?.code
+    throw err
+  }
+  return body.data
+}
+
+// GET /api/docs/{doc_id}/download —— 仅管理员；返回原文件 Blob，由调用方触发保存
+export async function downloadDocFile(docId) {
+  const res = await fetch(`/api/docs/${docId}/download`, { credentials: 'include' })
+  if (!res.ok) throw await readDocError(res)
+  return res.blob()
 }
 
 // GET /api/system/info

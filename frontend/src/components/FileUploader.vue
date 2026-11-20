@@ -1,28 +1,27 @@
 <script setup>
-// 文档上传组件：支持点击多选或拖拽多个文件；前端先做后缀白名单与大小校验，
-// 合法文件数组交给父组件按「小文件单请求 / 大文件分块」上传
+// 文档上传入口：点击多选或拖拽多个文件；前端先做后缀白名单与大小校验，
+// 合法文件交给父组件排队；不支持/超限文件带原因返回，由上传队列统一展示
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
   uploading: { type: Boolean, default: false },
-  // 单文件大小上限（MB）：由父组件按服务端 upload_total_max_mb 传入，避免前端写死
-  maxMb: { type: Number, default: 100 },
-  // 上传进度文案，例如「a.pdf：分块上传 67%（3 片，8.0MB/12.0MB）」
-  progressText: { type: String, default: '' }
+  // 单文件大小上限（MB）：由父组件按服务端 upload_max_mb 传入，避免前端写死
+  maxMb: { type: Number, default: 100 }
 })
-const emit = defineEmits(['upload', 'invalid'])
+const emit = defineEmits(['files', 'invalid'])
 
-const ALLOWED_EXTS = ['.pdf', '.docx', '.md']
+const ALLOWED_EXTS = ['.pdf', '.docx', '.md', '.xlsx', '.xlsm', '.xls', '.csv', '.doc']
+const ACCEPT = ALLOWED_EXTS.join(',')
 
 function pick(e) {
   const files = Array.from(e.target?.files || [])
   e.target.value = '' // 允许重复选择同一文件
-  if (files.length) emitValidFiles(files)
+  if (files.length) classify(files)
 }
 
 function onDrop(e) {
   const files = Array.from(e.dataTransfer?.files || [])
-  if (files.length) emitValidFiles(files)
+  if (files.length) classify(files)
 }
 
 function extOf(name) {
@@ -30,26 +29,26 @@ function extOf(name) {
   return dot >= 0 ? name.slice(dot).toLowerCase() : ''
 }
 
-function emitValidFiles(files) {
+function classify(files) {
   const valid = []
   const skipped = []
   const limitBytes = props.maxMb * 1024 * 1024
   for (const file of files) {
     if (!ALLOWED_EXTS.includes(extOf(file.name))) {
-      skipped.push(`${file.name}(格式不支持)`)
+      skipped.push({ name: file.name, reason: '格式不支持', size: file.size })
       continue
     }
     if (file.size > limitBytes) {
-      skipped.push(`${file.name}(超 ${props.maxMb}MB)`)
+      skipped.push({ name: file.name, reason: `超过 ${props.maxMb}MB`, size: file.size })
       continue
     }
     valid.push(file)
   }
   if (skipped.length) {
-    ElMessage.warning(`已跳过：${skipped.join('、')}`)
+    ElMessage.warning(`已跳过 ${skipped.length} 个文件：${skipped.map((s) => `${s.name}(${s.reason})`).join('、')}`)
     emit('invalid', skipped)
   }
-  if (valid.length) emit('upload', valid)
+  if (valid.length) emit('files', valid)
 }
 </script>
 
@@ -59,24 +58,57 @@ function emitValidFiles(files) {
     :class="{ busy: uploading }"
     @dragover.prevent
     @drop.prevent="onDrop"
-    v-loading="uploading"
-    :element-loading-text="progressText || '正在解析、切片并向量化入库…'"
   >
-    <input type="file" accept=".pdf,.docx,.md" multiple @change="pick" hidden id="doc-picker" />
+    <input
+      type="file"
+      :accept="ACCEPT"
+      multiple
+      @change="pick"
+      hidden
+      id="doc-picker"
+    />
     <label class="drop-hint" for="doc-picker">
-      <el-icon class="up-icon">⬆</el-icon>
-      <div>点击多选或一次拖入多个 PDF / DOCX / Markdown 文件</div>
+      <span class="up-icon" aria-hidden="true">⬆</span>
+      <div class="drop-title">拖拽文件到这里，或点击选择</div>
       <div class="sub">
-        单文件 ≤ {{ maxMb }}MB；大文件自动分块并行上传，逐文件完成解析、清洗、切片与向量化
+        支持 PDF / DOCX / MD / XLSX / XLSM / XLS / CSV / DOC
+      </div>
+      <div class="sub">
+        单文件 ≤ {{ maxMb }}MB；大文件自动分块上传，逐文件完成解析、切片与向量化
       </div>
     </label>
+    <div class="upload-note" aria-hidden="true">
+      <span>多文件会按队列逐个处理</span>
+      <span>失败可单文件重试</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.uploader { border: 1px dashed var(--border); border-radius: 8px; padding: 24px; }
-.uploader.busy { opacity: 0.8; }
-.drop-hint { cursor: pointer; text-align: center; color: var(--text-muted); }
-.sub { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
-.up-icon { font-size: 28px; }
+.uploader {
+  position: relative;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 22px 18px 14px;
+  background: var(--panel);
+}
+.uploader.busy { opacity: 0.75; }
+.uploader:hover { border-color: var(--primary); }
+.drop-hint { cursor: pointer; text-align: center; color: var(--text-muted); display: block; }
+.drop-title { font-size: 14px; color: var(--text-secondary); margin-top: 6px; }
+.sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.up-icon { font-size: 26px; line-height: 1; color: var(--primary); }
+.upload-note {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+@media (max-width: 640px) {
+  .upload-note { flex-direction: column; gap: 4px; align-items: center; }
+}
 </style>

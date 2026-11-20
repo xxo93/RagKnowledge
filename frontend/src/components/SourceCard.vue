@@ -11,7 +11,7 @@ const props = defineProps({
   query: { type: String, default: '' }
 })
 
-const emit = defineEmits(['toggle'])
+const emit = defineEmits(['toggle', 'preview'])
 
 function formatDocName(name) {
   return (name || '未命名文档').replace(/\.[A-Za-z0-9]+$/, '').replace(/_/g, ' ').trim() || '未命名文档'
@@ -29,6 +29,8 @@ const score = computed(() => Number(props.source.score || 0))
 // 联网来源没有相似度分数，用展示标签代替，避免出现"相似度 0.00"的误导
 const isWeb = computed(() => props.source.source_type === 'web')
 const isLowRelevance = computed(() => !isWeb.value && score.value > 0 && score.value < 0.5)
+// 仅知识库来源有 doc_id，可打开原文档预览；联网来源没有本地原件
+const canPreview = computed(() => !isWeb.value && Boolean(props.source.doc_id))
 
 const detailId = computed(() => `source-detail-${props.index}`)
 const scoreText = computed(() => score.value.toFixed(2))
@@ -97,6 +99,9 @@ async function copyLink() {
       </div>
       <div class="source-excerpt" v-html="excerptHtml"></div>
       <div class="source-actions">
+        <el-button v-if="canPreview" link size="small" type="primary" @click.stop="emit('preview', source)">
+          预览原文
+        </el-button>
         <el-button link size="small" @click="copyExcerpt">复制{{ isWeb ? '摘要' : '片段' }}</el-button>
         <el-button v-if="isWeb && source.url" link size="small" @click="copyLink">复制链接</el-button>
       </div>

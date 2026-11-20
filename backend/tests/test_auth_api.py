@@ -120,7 +120,7 @@ def test_admin_can_read_admin_only_get_endpoints(client: TestClient, monkeypatch
 
     from backend.services import vector_store
 
-    async def fake_list_documents(page, size, keyword=None, status=None):
+    async def fake_list_documents(page, size, keyword=None, status=None, start_date=None, end_date=None):
         return 1, [{"doc_id": 9, "doc_name": "samples/leave_policy.md", "chunk_count": 1}]
 
     monkeypatch.setattr(vector_store, "list_documents", fake_list_documents)

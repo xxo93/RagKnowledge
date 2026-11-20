@@ -35,3 +35,6 @@ data/exports/
 
 # ---- 临时验收输出 ----
 m4_accept_out.txt
+
+# ---- 临时验收样本与调试脚本 ----
+data/tmp*/

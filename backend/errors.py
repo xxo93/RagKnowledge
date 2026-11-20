@@ -21,6 +21,7 @@ ERR_SESSION_NOT_FOUND = 40402
 ERR_USER_NOT_FOUND = 40403
 ERR_TRACE_NOT_FOUND = 40405  # 运行日志 trace 不存在或不属于当前用户
 ERR_RECORD_NOT_FOUND = 40406  # 回答记录不存在或不属于当前用户（反馈/导出）
+ERR_FILE_MISSING = 40407      # 原文件不存在或已被清理（下载/预览）
 ERR_UNAUTHORIZED = 40101       # 未登录或登录态失效
 ERR_FORBIDDEN = 40303          # 已登录但无角色权限
 ERR_USER_EXISTS = 40004        # 用户名已存在 / 账号规则冲突
